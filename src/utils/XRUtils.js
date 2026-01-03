@@ -74,7 +74,18 @@ export async function getXRReferenceSpace(session, type = 'local') {
  */
 export async function requestHitTestSource(session, referenceSpace) {
   try {
-    return await session.requestHitTestSource({ space: referenceSpace });
+    // Try to request hit test source with plane entity type
+    // This helps filter for plane surfaces rather than arbitrary feature points
+    try {
+      return await session.requestHitTestSource({
+        space: referenceSpace,
+        entityTypes: ['plane'] // Prefer planes over arbitrary points
+      });
+    } catch (planeFilterError) {
+      // Fallback if plane filtering is not supported (older browsers)
+      console.warn('Plane entity type filtering not supported, using default hit test source');
+      return await session.requestHitTestSource({ space: referenceSpace });
+    }
   } catch (error) {
     console.error('Error requesting hit test source:', error);
     throw error;

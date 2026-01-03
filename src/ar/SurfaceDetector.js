@@ -14,6 +14,12 @@ export class SurfaceDetector {
     this.referenceSpace = null;
     this.surfaceOverlay = null;
     this.isReady = false;
+    this.lastValidHitTime = 0; // Track when we last had a valid hit (for stability)
+    this.stableHitCount = 0; // Count consecutive valid hits before showing overlay
+    this.lastHitPose = null; // Store last valid pose for stability
+    this.lastLoggedState = null; // Track last logged state to reduce console spam
+    this.lockedSurfaceHeight = null; // Lock onto specific surface height
+    this.overlaySize = { width: 0.8, depth: 0.6 }; // Fixed size, no dynamic resizing
 
     this._initialize();
   }
@@ -40,8 +46,9 @@ export class SurfaceDetector {
 
   _createSurfaceOverlay() {
     // Create a plane overlay mesh to show detected surfaces
-    // Start with a default size, will be updated when we detect the actual plane
-    const geometry = new THREE.PlaneGeometry(1, 1);
+    // Fixed size for stability - we don't resize dynamically
+    // 0.8m x 0.6m is a typical table/surface size
+    const geometry = new THREE.PlaneGeometry(this.overlaySize.width, this.overlaySize.depth);
     const material = this.materialLibrary.getSurfaceOverlayMaterial();
 
     this.surfaceOverlay = new THREE.Mesh(geometry, material);
@@ -80,7 +87,70 @@ export class SurfaceDetector {
       const pose = hit.getPose(localReferenceSpace);
 
       if (pose) {
-        // Store the hit result for getting plane info
+        const hitHeight = pose.transform.position.y;
+        const hitDistance = Math.sqrt(
+          pose.transform.position.x ** 2 +
+          pose.transform.position.z ** 2
+        );
+
+        // Filter out non-horizontal planes (walls, tilted surfaces)
+        if (!this._isHorizontalPlane(pose)) {
+          this.stableHitCount = 0;
+          const timeSinceLastHit = Date.now() - this.lastValidHitTime;
+          if (timeSinceLastHit > 500) {
+            this.surfaceOverlay.visible = false;
+            if (this.surfaceEdges) this.surfaceEdges.visible = false;
+            this.lockedSurfaceHeight = null; // Unlock
+          }
+          return null;
+        }
+
+        // HEIGHT FILTERING: Prefer surfaces that are elevated (tables, not floor)
+        // Floor is typically at Y=0 or very low
+        // Tables are typically 0.4m - 1.2m high
+        // If we haven't locked onto a surface yet, prefer elevated surfaces
+        if (!this.lockedSurfaceHeight) {
+          // Reject floor (surfaces below 0.3m unless very close)
+          if (hitHeight < 0.3 && hitDistance > 1.0) {
+            console.log(`Surface rejected - too low (${hitHeight.toFixed(2)}m), likely floor`);
+            return null;
+          }
+          // Prefer elevated surfaces
+          if (hitHeight > 0.35 && hitHeight < 1.5) {
+            console.log(`Surface accepted - good table height (${hitHeight.toFixed(2)}m)`);
+          }
+        } else {
+          // Once locked, only accept surfaces at similar height (±15cm)
+          const heightDiff = Math.abs(hitHeight - this.lockedSurfaceHeight);
+          if (heightDiff > 0.15) {
+            console.log(`Surface rejected - height mismatch (${hitHeight.toFixed(2)}m vs locked ${this.lockedSurfaceHeight.toFixed(2)}m)`);
+            return null;
+          }
+        }
+
+        // DISTANCE FILTERING: Prefer closer surfaces (within reasonable range)
+        if (hitDistance > 3.0) {
+          console.log(`Surface rejected - too far (${hitDistance.toFixed(2)}m)`);
+          return null;
+        }
+
+        // Valid horizontal surface detected at appropriate height/distance
+        this.lastValidHitTime = Date.now();
+        this.lastHitPose = pose;
+        this.stableHitCount++;
+
+        // Require at least 5 consecutive hits before showing overlay (strong stability)
+        if (this.stableHitCount < 5) {
+          return null;
+        }
+
+        // Lock onto this surface height on first display
+        if (this.stableHitCount === 5) {
+          this.lockedSurfaceHeight = hitHeight;
+          console.log(`🔒 LOCKED onto surface at height ${hitHeight.toFixed(2)}m, distance ${hitDistance.toFixed(2)}m`);
+        }
+
+        // Store the hit result
         this.lastHitResult = hit;
 
         // Update overlay position and orientation
@@ -99,7 +169,7 @@ export class SurfaceDetector {
           pose.transform.orientation.w
         );
 
-        // Rotate to lay flat (plane is vertical by default)
+        // Rotate to lay flat
         this.surfaceOverlay.rotateX(-Math.PI / 2);
 
         // Update edges to match
@@ -109,62 +179,77 @@ export class SurfaceDetector {
           this.surfaceEdges.quaternion.copy(this.surfaceOverlay.quaternion);
         }
 
-        // Try to get the actual plane size if available
-        if (hit.results && hit.results[0] && hit.results[0].plane) {
-          const plane = hit.results[0].plane;
-          if (plane.polygon) {
-            this._updateOverlaySizeFromPlane(plane);
-          }
-        }
-
         return hit;
       }
     }
 
-    // No surface detected
-    this.surfaceOverlay.visible = false;
-    if (this.surfaceEdges) {
-      this.surfaceEdges.visible = false;
+    // No hit test results - keep overlay visible briefly
+    const timeSinceLastHit = Date.now() - this.lastValidHitTime;
+    if (timeSinceLastHit > 500) {
+      this.surfaceOverlay.visible = false;
+      if (this.surfaceEdges) this.surfaceEdges.visible = false;
+      this.stableHitCount = 0;
+      this.lockedSurfaceHeight = null; // Unlock after timeout
     }
+
     return null;
   }
 
   /**
-   * Update overlay size based on detected plane
-   * @param {XRPlane} plane
+   * Check if a detected surface is horizontal (not vertical or tilted)
+   * @param {XRPose} pose - The pose from the hit test result
+   * @returns {boolean} True if the surface is horizontal
    */
-  _updateOverlaySizeFromPlane(plane) {
-    try {
-      // Calculate bounding box of the plane polygon
-      let minX = Infinity, maxX = -Infinity;
-      let minZ = Infinity, maxZ = -Infinity;
+  _isHorizontalPlane(pose) {
+    // Extract the surface normal from the pose's orientation quaternion
+    // For a horizontal plane, the normal should point upward (Y-axis)
 
-      for (const point of plane.polygon) {
-        minX = Math.min(minX, point.x);
-        maxX = Math.max(maxX, point.x);
-        minZ = Math.min(minZ, point.z);
-        maxZ = Math.max(maxZ, point.z);
-      }
+    // Get the quaternion from the pose
+    const quat = new THREE.Quaternion(
+      pose.transform.orientation.x,
+      pose.transform.orientation.y,
+      pose.transform.orientation.z,
+      pose.transform.orientation.w
+    );
 
-      const width = maxX - minX;
-      const depth = maxZ - minZ;
+    // The surface normal is the Y-axis of the local coordinate system
+    // For WebXR hit test results, Y points away from the surface (the normal)
+    const normal = new THREE.Vector3(0, 1, 0);
+    normal.applyQuaternion(quat);
 
-      // Update overlay geometry to match detected plane size
-      if (width > 0 && depth > 0) {
-        this.surfaceOverlay.geometry.dispose();
-        this.surfaceOverlay.geometry = new THREE.PlaneGeometry(width, depth);
+    // Check if the normal is mostly pointing up or down (vertical normal = horizontal plane)
+    // For horizontal surfaces, the normal should align with world Y-axis
+    const worldUp = new THREE.Vector3(0, 1, 0);
+    const dotProduct = Math.abs(normal.dot(worldUp));
 
-        // Update edges geometry to match
-        if (this.surfaceEdges) {
-          this.surfaceEdges.geometry.dispose();
-          const edgesGeometry = new THREE.EdgesGeometry(this.surfaceOverlay.geometry);
-          this.surfaceEdges.geometry = edgesGeometry;
-        }
-      }
-    } catch (error) {
-      // Plane info might not be available, use default size
-      console.log('Could not get plane size, using default');
+    // Threshold: 0.92 means ~23 degrees max tilt (cos(23°) ≈ 0.92)
+    // Stricter threshold for better horizontal detection
+    // For horizontal table: dot ≈ 1.0 (normal points straight up)
+    // For vertical wall: dot ≈ 0.0 (normal points horizontally)
+    const isHorizontal = dotProduct > 0.92;
+
+    // Log only when state changes to reduce console spam
+    const currentState = `${isHorizontal ? 'H' : 'V'}-${dotProduct.toFixed(2)}`;
+    if (this.lastLoggedState !== currentState) {
+      console.log(`Surface ${isHorizontal ? 'ACCEPTED ✓' : 'REJECTED ✗'} - ` +
+                  `Normal: (${normal.x.toFixed(2)}, ${normal.y.toFixed(2)}, ${normal.z.toFixed(2)}), ` +
+                  `Dot: ${dotProduct.toFixed(2)} ${isHorizontal ? '(horizontal)' : '(vertical/tilted)'}`);
+      this.lastLoggedState = currentState;
     }
+
+    return isHorizontal;
+  }
+
+  /**
+   * Get detected surface size for desktop placement
+   * Returns fixed size - no dynamic resizing for stability
+   * @returns {Object} {width, depth}
+   */
+  getDetectedSize() {
+    return {
+      width: this.overlaySize.width,
+      depth: this.overlaySize.depth
+    };
   }
 
   /**

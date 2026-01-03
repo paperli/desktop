@@ -2,6 +2,7 @@ import { SceneManager } from './scene/SceneManager.js';
 import { MaterialLibrary } from './scene/MaterialLibrary.js';
 import { SurfaceDetector } from './ar/SurfaceDetector.js';
 import { DesktopPlacer } from './ar/DesktopPlacer.js';
+import { ControllerVisualizer } from './ar/ControllerVisualizer.js';
 import { PhysicsWorld } from './physics/PhysicsWorld.js';
 import { PlateSpawner } from './objects/PlateSpawner.js';
 import { TouchHandler } from './interaction/TouchHandler.js';
@@ -33,6 +34,7 @@ class ARVirtualDesktop {
     this.referenceSpace = null;
     this.surfaceDetector = null;
     this.desktopPlacer = null;
+    this.controllerVisualizer = null;
 
     // Objects and interaction
     this.plateSpawner = null;
@@ -43,6 +45,7 @@ class ARVirtualDesktop {
     // State
     this.isDesktopPlaced = false;
     this.lastFrameTime = 0;
+    this.selectEventPending = false; // Track user interaction (trigger/tap/pinch)
 
     this._initialize();
   }
@@ -92,6 +95,9 @@ class ARVirtualDesktop {
 
       // Setup session end handler
       this.session.addEventListener('end', this._onSessionEnd.bind(this));
+
+      // Setup select event listener for user interactions (trigger pull, tap, pinch)
+      this.session.addEventListener('select', this._onSelectEvent.bind(this));
 
       // Initialize AR components
       await this._setupAR();
@@ -154,6 +160,12 @@ class ARVirtualDesktop {
       this.materialLibrary
     );
 
+    // Initialize controller visualizer
+    this.controllerVisualizer = new ControllerVisualizer(
+      this.session,
+      this.sceneManager
+    );
+
     // Initialize physics world
     this.physicsWorld = new PhysicsWorld();
 
@@ -180,12 +192,26 @@ class ARVirtualDesktop {
     event.preventDefault();
   }
 
+  _onSelectEvent(event) {
+    // Handle XR select events (trigger pull, tap, pinch gesture)
+    // This fires when user performs an interaction action
+    if (!this.isDesktopPlaced) {
+      console.log('Select event received from:', event.inputSource.targetRayMode);
+      this.selectEventPending = true;
+    }
+  }
+
   _onXRFrame(time, frame) {
     if (!frame) return;
 
     // Calculate delta time
     const deltaTime = this.lastFrameTime ? (time - this.lastFrameTime) / 1000 : 0;
     this.lastFrameTime = time;
+
+    // Update controller visualization (always visible)
+    if (this.controllerVisualizer) {
+      this.controllerVisualizer.update(frame, this.referenceSpace);
+    }
 
     // Update surface detection (before desktop placement)
     if (!this.isDesktopPlaced) {
@@ -217,24 +243,12 @@ class ARVirtualDesktop {
   }
 
   _checkForTap(frame) {
-    // Detect input from any XR input source (screen tap, controller, hand tracking)
-    const inputSources = this.session.inputSources;
-
-    for (const source of inputSources) {
-      // Support multiple input modes:
-      // - 'screen' for Android touch
-      // - 'tracked-pointer' for Quest controllers
-      // - 'gaze' for gaze-based input
-      // - 'hand' for hand tracking (if available)
-      const supportedModes = ['screen', 'tracked-pointer', 'gaze', 'hand'];
-
-      if (supportedModes.includes(source.targetRayMode)) {
-        const pose = frame.getPose(source.targetRaySpace, this.referenceSpace);
-        if (pose) {
-          console.log('Input detected from:', source.targetRayMode);
-          return true;
-        }
-      }
+    // Check if user performed a select action (trigger pull, tap, pinch)
+    // This flag is set by the 'select' event listener
+    if (this.selectEventPending) {
+      console.log('Tap/trigger detected, placing desktop');
+      this.selectEventPending = false; // Reset flag
+      return true;
     }
 
     return false;
@@ -244,18 +258,9 @@ class ARVirtualDesktop {
     try {
       console.log('Placing desktop...');
 
-      // Try to get detected surface size from the overlay
-      let detectedSize = null;
-      if (this.surfaceDetector.surfaceOverlay && this.surfaceDetector.surfaceOverlay.geometry) {
-        const geometry = this.surfaceDetector.surfaceOverlay.geometry;
-        if (geometry.parameters) {
-          detectedSize = {
-            width: geometry.parameters.width,
-            depth: geometry.parameters.height // PlaneGeometry uses height for depth
-          };
-          console.log('Detected surface dimensions:', detectedSize);
-        }
-      }
+      // Get fixed surface size from detector (no dynamic resizing)
+      const detectedSize = this.surfaceDetector.getDetectedSize();
+      console.log('Using surface dimensions:', detectedSize);
 
       // Place desktop with detected size
       const bounds = await this.desktopPlacer.placeDesktop(
@@ -353,6 +358,11 @@ class ARVirtualDesktop {
       this.desktopPlacer = null;
     }
 
+    if (this.controllerVisualizer) {
+      this.controllerVisualizer.dispose();
+      this.controllerVisualizer = null;
+    }
+
     if (this.physicsWorld) {
       this.physicsWorld.dispose();
       this.physicsWorld = null;
@@ -370,6 +380,7 @@ class ARVirtualDesktop {
 
     // Reset state
     this.isDesktopPlaced = false;
+    this.selectEventPending = false;
     this.session = null;
     this.referenceSpace = null;
 

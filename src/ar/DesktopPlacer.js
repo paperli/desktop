@@ -96,14 +96,23 @@ export class DesktopPlacer {
     this.desktop.castShadow = true;
     this.desktop.receiveShadow = true;
 
-    // Set position and orientation
+    // Set position - use detected position
     this.desktop.position.copy(position);
     this.desktop.position.y += thickness / 2; // Adjust so top is at detected surface
-    this.desktop.quaternion.copy(orientation);
+
+    // FORCE HORIZONTAL ORIENTATION - ignore detected surface tilt
+    // Extract only the Y-axis rotation (yaw) from detected orientation
+    // This keeps the desktop aligned with the surface direction but perfectly level
+    const euler = new THREE.Euler().setFromQuaternion(orientation, 'YXZ');
+    const yRotationOnly = new THREE.Euler(0, euler.y, 0, 'YXZ'); // Keep only yaw, zero out pitch/roll
+    this.desktop.quaternion.setFromEuler(yRotationOnly);
+
+    console.log('Desktop forced to horizontal orientation (yaw only):', (euler.y * 180 / Math.PI).toFixed(1), 'degrees');
 
     this.sceneManager.add(this.desktop);
 
     // Calculate bounds for physics constraints
+    // Use the forced horizontal quaternion, not the detected tilted one
     this.desktopBounds = {
       width: width,
       depth: depth,
@@ -114,7 +123,7 @@ export class DesktopPlacer {
       maxZ: depth / 2,
       centerY: position.y + thickness,
       position: position.clone(),
-      quaternion: orientation.clone(),
+      quaternion: this.desktop.quaternion.clone(), // Use forced horizontal orientation
     };
 
     console.log('Desktop placed with bounds:', this.desktopBounds);
