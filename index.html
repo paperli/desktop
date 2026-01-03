@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>AR Virtual Desktop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- Entry Page -->
+  <div id="entry-page" class="entry-page">
+    <div class="entry-content">
+      <h1 class="app-title">AR Virtual Desktop</h1>
+      <p class="app-description">Place a virtual desktop on your table and interact with physics-enabled objects</p>
+
+      <!-- Optional: Preview container for simulated desktop -->
+      <div id="preview-container" class="preview-container"></div>
+
+      <button id="enter-ar-button" class="enter-ar-button">Enter AR</button>
+
+      <div id="error-message" class="error-message" style="display: none;"></div>
+    </div>
+  </div>
+
+  <!-- AR Canvas (hidden until AR session starts) -->
+  <canvas id="ar-canvas" class="ar-canvas" style="display: none;"></canvas>
+
+  <!-- AR Hint Text -->
+  <div id="hint-text" class="hint-text" style="display: none;">
+    <p>Tap a table to place virtual desktop</p>
+  </div>
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="loading-overlay" style="display: none;">
+    <div class="loading-spinner"></div>
+    <p>Initializing AR...</p>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
