@@ -80,9 +80,6 @@ export class Plate {
     // Ensure body never sleeps (for debugging)
     this.body.allowSleep = false;
 
-    // Store original mass for dragging behavior
-    this.originalMass = PLATE.MASS;
-
     // Add to physics world
     this.physicsWorld.addPlateBody(this.body);
 
@@ -97,6 +94,21 @@ export class Plate {
       // Copy position and rotation from physics body to mesh
       this.mesh.position.copy(this.body.position);
       this.mesh.quaternion.copy(this.body.quaternion);
+
+      // Clamp velocity to prevent extreme speeds
+      const maxVelocity = 5.0; // m/s
+      const speed = this.body.velocity.length();
+      if (speed > maxVelocity) {
+        this.body.velocity.scale(maxVelocity / speed, this.body.velocity);
+      }
+
+      // Prevent falling below desktop (safety constraint)
+      const minY = this.physicsWorld.desktopBounds?.position?.y;
+      if (minY !== undefined && this.body.position.y < minY - 0.1) {
+        console.warn('Plate fell below desktop! Resetting position.');
+        this.body.position.y = minY + 0.1;
+        this.body.velocity.y = Math.max(0, this.body.velocity.y); // Remove downward velocity
+      }
     }
   }
 
@@ -107,21 +119,17 @@ export class Plate {
   setKinematic(kinematic) {
     this.isDragging = kinematic;
     if (kinematic) {
-      // Instead of making it kinematic, just set very high mass temporarily
-      // This prevents it from being affected by other plates but still allows detection
-      this.originalMass = this.body.mass;
-      this.body.mass = 10000; // Very heavy
-      this.body.updateMassProperties();
+      // Make it truly kinematic - no physics simulation while dragging
+      this.body.type = CANNON.Body.KINEMATIC;
       this.body.velocity.setZero();
       this.body.angularVelocity.setZero();
-      console.log('Plate set to heavy mode for dragging');
+      this.body.collisionResponse = false; // Don't push other objects
+      console.log('Plate set to kinematic mode for dragging');
     } else {
-      // Restore original mass
-      if (this.originalMass !== undefined) {
-        this.body.mass = this.originalMass;
-        this.body.updateMassProperties();
-        console.log('Plate mass restored to', this.originalMass);
-      }
+      // Restore to dynamic
+      this.body.type = CANNON.Body.DYNAMIC;
+      this.body.collisionResponse = true; // Re-enable collision response
+      console.log('Plate restored to dynamic mode');
     }
   }
 

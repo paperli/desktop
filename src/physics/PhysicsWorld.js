@@ -77,7 +77,7 @@ export class PhysicsWorld {
    * @param {Object} bounds - Desktop bounds from DesktopPlacer
    */
   setupDesktopBoundaries(bounds) {
-    this.desktopBounds = bounds;
+    this.desktopBounds = bounds; // Store for plate constraint checking
 
     // Clear existing desktop bodies
     this.desktopBodies.forEach(body => this.world.removeBody(body));
