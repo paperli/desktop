@@ -20,12 +20,19 @@ export class PhysicsWorld {
       gravity: new CANNON.Vec3(0, PHYSICS.GRAVITY, 0),
     });
 
-    // Configure solver for better performance
+    // Configure solver for better collision detection
     this.world.solver.iterations = PHYSICS.SOLVER_ITERATIONS;
-    this.world.allowSleep = true;
+    this.world.allowSleep = false; // Disable sleep for now to ensure collisions work
 
     // Configure broadphase for better collision detection
-    this.world.broadphase = new CANNON.NaiveBroadphase();
+    this.world.broadphase = new CANNON.SAPBroadphase(this.world); // More efficient than NaiveBroadphase
+
+    // Enable collision detection debugging
+    let collisionCount = 0;
+    this.world.addEventListener('beginContact', (event) => {
+      collisionCount++;
+      console.log(`Collision #${collisionCount}: Body A mass=${event.bodyA.mass}, Body B mass=${event.bodyB.mass}`);
+    });
 
     // Create shared materials for consistent collision behavior
     this.plateMaterial = new CANNON.Material('plate');

@@ -71,13 +71,22 @@ export class Plate {
       material: this.physicsWorld.getPlateMaterial(), // Use shared material
       linearDamping: PHYSICS.DAMPING,
       angularDamping: PHYSICS.ANGULAR_DAMPING,
+      collisionResponse: true, // Ensure collision response is enabled
     });
 
     // Set initial position
     this.body.position.set(position.x, position.y, position.z);
 
+    // Ensure body never sleeps (for debugging)
+    this.body.allowSleep = false;
+
+    // Store original mass for dragging behavior
+    this.originalMass = PLATE.MASS;
+
     // Add to physics world
     this.physicsWorld.addPlateBody(this.body);
+
+    console.log('Plate physics body created with mass:', PLATE.MASS);
   }
 
   /**
@@ -98,11 +107,21 @@ export class Plate {
   setKinematic(kinematic) {
     this.isDragging = kinematic;
     if (kinematic) {
-      this.body.type = CANNON.Body.KINEMATIC;
+      // Instead of making it kinematic, just set very high mass temporarily
+      // This prevents it from being affected by other plates but still allows detection
+      this.originalMass = this.body.mass;
+      this.body.mass = 10000; // Very heavy
+      this.body.updateMassProperties();
       this.body.velocity.setZero();
       this.body.angularVelocity.setZero();
+      console.log('Plate set to heavy mode for dragging');
     } else {
-      this.body.type = CANNON.Body.DYNAMIC;
+      // Restore original mass
+      if (this.originalMass !== undefined) {
+        this.body.mass = this.originalMass;
+        this.body.updateMassProperties();
+        console.log('Plate mass restored to', this.originalMass);
+      }
     }
   }
 
