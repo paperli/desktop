@@ -28,8 +28,8 @@ export class ThrowController {
       );
 
       // Amplify velocity for more satisfying throws (XR hand tracking is slower than swipes)
-      // Multiplier of 2.5x makes throws feel more impactful
-      velocity3D.multiplyScalar(2.5);
+      // Multiplier of 5x makes throws travel farther
+      velocity3D.multiplyScalar(5.0);
 
       // Dampen Y component (vertical) to keep throws mostly horizontal on desktop
       velocity3D.y *= 0.2;

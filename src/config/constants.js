@@ -7,7 +7,7 @@ export const PLATE = {
   HEIGHT: 0.025,    // 2.5cm height (keep thickness)
   SHAPE: 'box',     // 'cylinder' for circular plates, 'box' for square plates
   MASS: 0.3,        // kg (reduced mass for smaller size)
-  FRICTION: 0.4,    // Increased friction to prevent sliding off
+  FRICTION: 0.25,   // Reduced for better sliding (balanced between control and momentum)
   RESTITUTION: 0.3, // Bounciness (0 = no bounce, 1 = perfect bounce)
 };
 
@@ -40,8 +40,8 @@ export const PHYSICS = {
 // Interaction
 export const INTERACTION = {
   DRAG_SMOOTH_FACTOR: 0.3, // Lower = smoother but more lag
-  THROW_VELOCITY_SCALE: 2.0, // Multiplier for throw velocity
-  MAX_THROW_VELOCITY: 5.0, // m/s maximum throw speed
+  THROW_VELOCITY_SCALE: 2.0, // Multiplier for throw velocity (legacy 2D touch)
+  MAX_THROW_VELOCITY: 8.0, // m/s maximum throw speed (increased for more satisfying throws)
   TOUCH_SAMPLES: 3, // Number of touch positions to track for velocity calculation
   TAP_THRESHOLD: 10, // pixels - movement less than this is considered a tap
   SWIPE_THRESHOLD: 50, // pixels - movement more than this is a swipe

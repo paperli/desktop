@@ -1,5 +1,5 @@
 import * as CANNON from 'cannon-es';
-import { PHYSICS, DESKTOP } from '../config/constants.js';
+import { PHYSICS, DESKTOP, PLATE } from '../config/constants.js';
 
 /**
  * Manages Cannon.js physics world and simulation
@@ -44,7 +44,7 @@ export class PhysicsWorld {
       this.plateMaterial,
       this.plateMaterial,
       {
-        friction: 0.4,
+        friction: PLATE.FRICTION, // Use plate friction constant (0.25)
         restitution: 0.3, // Slight bounce when plates hit each other
         contactEquationStiffness: 1e9, // Increased stiffness to prevent penetration
         contactEquationRelaxation: 3,
@@ -59,7 +59,7 @@ export class PhysicsWorld {
       this.plateMaterial,
       this.desktopMaterial,
       {
-        friction: 0.5,
+        friction: PLATE.FRICTION, // Use plate friction constant (0.25) for better sliding
         restitution: 0.1, // Less bounce on desktop surface
         contactEquationStiffness: 1e9, // Very stiff to prevent penetration
         contactEquationRelaxation: 3,
