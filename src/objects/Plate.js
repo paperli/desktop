@@ -119,16 +119,18 @@ export class Plate {
   setKinematic(kinematic) {
     this.isDragging = kinematic;
     if (kinematic) {
-      // Make it truly kinematic - no physics simulation while dragging
+      // Make it kinematic - follows user input but can still push other objects
       this.body.type = CANNON.Body.KINEMATIC;
       this.body.velocity.setZero();
       this.body.angularVelocity.setZero();
-      this.body.collisionResponse = false; // Don't push other objects
+      // Keep collisionResponse = true so it can push other plates during drag
+      // Kinematic bodies push based on penetration depth, not mass, so forces are reasonable
+      this.body.collisionResponse = true;
       console.log('Plate set to kinematic mode for dragging');
     } else {
       // Restore to dynamic
       this.body.type = CANNON.Body.DYNAMIC;
-      this.body.collisionResponse = true; // Re-enable collision response
+      this.body.collisionResponse = true;
       console.log('Plate restored to dynamic mode');
     }
   }
