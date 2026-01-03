@@ -129,4 +129,70 @@ export function getPoseTransform(pose) {
   return { position, quaternion };
 }
 
+/**
+ * Detect primary input source type from XR session
+ * @param {XRSession} session
+ * @returns {string} - 'touch', 'controller', 'hand', or 'gaze'
+ */
+export function detectInputType(session) {
+  if (!session || !session.inputSources || session.inputSources.length === 0) {
+    return 'unknown';
+  }
+
+  // Check all input sources and return the most capable one
+  // Priority: controller > hand > touch > gaze
+  for (const source of session.inputSources) {
+    if (source.targetRayMode === 'tracked-pointer') {
+      return 'controller';
+    }
+  }
+
+  for (const source of session.inputSources) {
+    if (source.targetRayMode === 'hand') {
+      return 'hand';
+    }
+  }
+
+  for (const source of session.inputSources) {
+    if (source.targetRayMode === 'screen') {
+      return 'touch';
+    }
+  }
+
+  for (const source of session.inputSources) {
+    if (source.targetRayMode === 'gaze') {
+      return 'gaze';
+    }
+  }
+
+  return 'unknown';
+}
+
+/**
+ * Get appropriate hint text based on input type
+ * @param {string} inputType - Result from detectInputType()
+ * @param {string} action - 'place' or 'interact'
+ * @returns {string} - Hint text
+ */
+export function getHintText(inputType, action = 'place') {
+  const hints = {
+    place: {
+      touch: 'Tap a surface to place virtual desktop',
+      controller: 'Point and pull trigger to place virtual desktop',
+      hand: 'Point and pinch to place virtual desktop',
+      gaze: 'Look at a surface and select to place virtual desktop',
+      unknown: 'Select a surface to place virtual desktop',
+    },
+    interact: {
+      touch: 'Tap, drag or throw plates to interact',
+      controller: 'Point and pull trigger to grab and throw plates',
+      hand: 'Pinch to grab and throw plates',
+      gaze: 'Look and select to interact with plates',
+      unknown: 'Select plates to interact',
+    },
+  };
+
+  return hints[action]?.[inputType] || hints[action].unknown;
+}
+
 import * as THREE from 'three';

@@ -10,7 +10,7 @@ import { ThrowController } from './interaction/ThrowController.js';
 import { EntryPage } from './ui/EntryPage.js';
 import { HintDisplay } from './ui/HintDisplay.js';
 import { ErrorHandler } from './ui/ErrorHandler.js';
-import { isARSupported, requestXRSession, getXRReferenceSpace } from './utils/XRUtils.js';
+import { isARSupported, requestXRSession, getXRReferenceSpace, detectInputType, getHintText } from './utils/XRUtils.js';
 import { XR_CONFIG } from './config/constants.js';
 
 /**
@@ -99,8 +99,11 @@ class ARVirtualDesktop {
       // Transition to AR mode
       this.entryPage.transitionToAR();
 
-      // Show placement hint
-      this.hintDisplay.showPlacementHint();
+      // Detect input type and show appropriate hint
+      const inputType = detectInputType(this.session);
+      const placementHint = getHintText(inputType, 'place');
+      console.log('Input type detected:', inputType);
+      this.hintDisplay.showPlacementHint(placementHint);
 
     } catch (error) {
       console.error('Failed to start AR session:', error);
@@ -214,13 +217,21 @@ class ARVirtualDesktop {
   }
 
   _checkForTap(frame) {
-    // Simple tap detection using input sources
+    // Detect input from any XR input source (screen tap, controller, hand tracking)
     const inputSources = this.session.inputSources;
 
     for (const source of inputSources) {
-      if (source.targetRayMode === 'screen') {
+      // Support multiple input modes:
+      // - 'screen' for Android touch
+      // - 'tracked-pointer' for Quest controllers
+      // - 'gaze' for gaze-based input
+      // - 'hand' for hand tracking (if available)
+      const supportedModes = ['screen', 'tracked-pointer', 'gaze', 'hand'];
+
+      if (supportedModes.includes(source.targetRayMode)) {
         const pose = frame.getPose(source.targetRaySpace, this.referenceSpace);
         if (pose) {
+          console.log('Input detected from:', source.targetRayMode);
           return true;
         }
       }

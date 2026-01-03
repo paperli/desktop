@@ -11,10 +11,11 @@ export class HintDisplay {
 
   /**
    * Show placement hint
+   * @param {string} text - Optional custom hint text
    */
-  showPlacementHint() {
+  showPlacementHint(text = null) {
     if (this.hintElement) {
-      this.hintElement.querySelector('p').textContent = UI.HINT_PLACEMENT;
+      this.hintElement.querySelector('p').textContent = text || UI.HINT_PLACEMENT;
       this.hintElement.style.display = 'block';
       this.isVisible = true;
     }
@@ -22,10 +23,11 @@ export class HintDisplay {
 
   /**
    * Show interaction hint
+   * @param {string} text - Optional custom hint text
    */
-  showInteractionHint() {
+  showInteractionHint(text = null) {
     if (this.hintElement) {
-      this.hintElement.querySelector('p').textContent = UI.HINT_INTERACTION;
+      this.hintElement.querySelector('p').textContent = text || UI.HINT_INTERACTION;
       this.hintElement.style.display = 'block';
       this.isVisible = true;
     }
