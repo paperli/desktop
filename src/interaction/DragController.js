@@ -106,10 +106,57 @@ export class DragController {
   }
 
   /**
+   * Update plate position during drag using XR raycaster
+   * @param {Plate} plate
+   * @param {THREE.Raycaster} raycaster
+   */
+  updateDragXR(plate, raycaster) {
+    // Intersect with drag plane
+    const intersects = raycaster.intersectObject(this.dragPlane);
+
+    if (intersects.length > 0) {
+      const intersectPoint = intersects[0].point;
+
+      // Clamp to desktop bounds (in local desktop space)
+      const localX = intersectPoint.x - this.desktopBounds.position.x;
+      const localZ = intersectPoint.z - this.desktopBounds.position.z;
+
+      // Apply bounds with padding
+      const padding = 0.05;
+      const clampedX = Math.max(
+        this.desktopBounds.minX + padding,
+        Math.min(this.desktopBounds.maxX - padding, localX)
+      );
+      const clampedZ = Math.max(
+        this.desktopBounds.minZ + padding,
+        Math.min(this.desktopBounds.maxZ - padding, localZ)
+      );
+
+      // Convert back to world space
+      const targetPosition = new THREE.Vector3(
+        this.desktopBounds.position.x + clampedX,
+        this.desktopBounds.centerY + 0.03, // Slightly above surface
+        this.desktopBounds.position.z + clampedZ
+      );
+
+      // Smooth interpolation for natural feel
+      const currentPos = plate.getMesh().position;
+      const smoothedPos = new THREE.Vector3(
+        lerp(currentPos.x, targetPosition.x, INTERACTION.DRAG_SMOOTH_FACTOR),
+        targetPosition.y,
+        lerp(currentPos.z, targetPosition.z, INTERACTION.DRAG_SMOOTH_FACTOR)
+      );
+
+      plate.setPosition(smoothedPos);
+    }
+  }
+
+  /**
    * End dragging a plate
    * @param {Plate} plate
    */
   endDrag(plate) {
+    console.log('Ending drag on plate');
     plate.setKinematic(false);
   }
 

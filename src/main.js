@@ -202,6 +202,11 @@ class ARVirtualDesktop {
       if (this.plateSpawner) {
         this.plateSpawner.update();
       }
+
+      // Update touch handler for XR input (dragging)
+      if (this.touchHandler) {
+        this.touchHandler.update(frame, this.referenceSpace);
+      }
     }
 
     // Render scene
@@ -264,23 +269,27 @@ class ARVirtualDesktop {
 
       this.throwController = new ThrowController(this.sceneManager.camera);
 
-      // Setup touch handler
+      // Setup touch handler with XR session
       this.touchHandler = new TouchHandler(
         this.sceneManager,
         this.sceneManager.camera,
-        this.plateSpawner
+        this.plateSpawner,
+        this.session
       );
 
       // Connect touch handler callbacks
       this.touchHandler.onPlateSelected = (plate) => {
+        console.log('Plate selected callback triggered');
         this.dragController.startDrag(plate);
       };
 
-      this.touchHandler.onPlateDragged = (plate, screenX, screenY) => {
-        this.dragController.updateDrag(plate, screenX, screenY);
+      this.touchHandler.onPlateDraggingXR = (plate, raycaster) => {
+        // Update drag using XR raycaster
+        this.dragController.updateDragXR(plate, raycaster);
       };
 
       this.touchHandler.onPlateReleased = (plate, gestureType) => {
+        console.log('Plate released callback triggered');
         this.dragController.endDrag(plate);
       };
 
