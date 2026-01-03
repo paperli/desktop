@@ -64,14 +64,11 @@ export class Plate {
       );
     }
 
-    // Create rigid body
+    // Create rigid body using shared plate material for proper collision
     this.body = new CANNON.Body({
       mass: PLATE.MASS,
       shape: shape,
-      material: new CANNON.Material({
-        friction: PLATE.FRICTION,
-        restitution: PLATE.RESTITUTION,
-      }),
+      material: this.physicsWorld.getPlateMaterial(), // Use shared material
       linearDamping: PHYSICS.DAMPING,
       angularDamping: PHYSICS.ANGULAR_DAMPING,
     });

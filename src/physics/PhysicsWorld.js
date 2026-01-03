@@ -27,18 +27,37 @@ export class PhysicsWorld {
     // Configure broadphase for better collision detection
     this.world.broadphase = new CANNON.NaiveBroadphase();
 
-    // Set default contact material
-    const defaultMaterial = new CANNON.Material('default');
-    const defaultContactMaterial = new CANNON.ContactMaterial(
-      defaultMaterial,
-      defaultMaterial,
+    // Create shared materials for consistent collision behavior
+    this.plateMaterial = new CANNON.Material('plate');
+    this.desktopMaterial = new CANNON.Material('desktop');
+
+    // Define contact material between plates (for plate-to-plate collision)
+    const platePlateContact = new CANNON.ContactMaterial(
+      this.plateMaterial,
+      this.plateMaterial,
       {
-        friction: 0.3,
-        restitution: 0.4,
+        friction: 0.4,
+        restitution: 0.3, // Slight bounce when plates hit each other
+        contactEquationStiffness: 1e8,
+        contactEquationRelaxation: 3,
       }
     );
-    this.world.addContactMaterial(defaultContactMaterial);
-    this.world.defaultContactMaterial = defaultContactMaterial;
+    this.world.addContactMaterial(platePlateContact);
+
+    // Define contact material between plates and desktop
+    const plateDesktopContact = new CANNON.ContactMaterial(
+      this.plateMaterial,
+      this.desktopMaterial,
+      {
+        friction: 0.5,
+        restitution: 0.1, // Less bounce on desktop surface
+        contactEquationStiffness: 1e8,
+        contactEquationRelaxation: 3,
+      }
+    );
+    this.world.addContactMaterial(plateDesktopContact);
+
+    console.log('Physics materials and contact materials initialized');
   }
 
   /**
@@ -52,12 +71,13 @@ export class PhysicsWorld {
     this.desktopBodies.forEach(body => this.world.removeBody(body));
     this.desktopBodies = [];
 
-    // Create floor (desktop surface)
+    // Create floor (desktop surface) with desktop material
     const floorBody = new CANNON.Body({
       type: CANNON.Body.STATIC,
       shape: new CANNON.Box(
         new CANNON.Vec3(bounds.width / 2, DESKTOP.THICKNESS / 2, bounds.depth / 2)
       ),
+      material: this.desktopMaterial,
     });
 
     floorBody.position.set(
@@ -122,6 +142,7 @@ export class PhysicsWorld {
         shape: new CANNON.Box(
           new CANNON.Vec3(wall.width / 2, wall.height / 2, wall.depth / 2)
         ),
+        material: this.desktopMaterial, // Use desktop material for walls too
       });
 
       // Position walls on the desktop surface, at the edges
@@ -185,6 +206,14 @@ export class PhysicsWorld {
    */
   getWorld() {
     return this.world;
+  }
+
+  /**
+   * Get shared plate material for consistent collisions
+   * @returns {CANNON.Material}
+   */
+  getPlateMaterial() {
+    return this.plateMaterial;
   }
 
   /**
