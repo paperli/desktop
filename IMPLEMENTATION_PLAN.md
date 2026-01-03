@@ -765,3 +765,221 @@ world.addEventListener('beginContact', (event) => {
 2. **Hand Tracking**: Would native hand tracking (vs screen tap) provide better velocity data?
 3. **Multiple Desktops**: How to manage physics boundaries with multiple surfaces?
 4. **Performance Scaling**: How many plates can we support before FPS drops?
+
+---
+
+## Meta Quest Browser Support
+
+### Implementation Status: ✅ Ready for Testing
+
+The current implementation **should work on Meta Quest browser** without modifications, as we use platform-agnostic XR Input Sources API. However, Quest-specific optimizations have been added.
+
+### What Works Out-of-the-Box
+
+1. **XR Input Sources API**
+   - Uses `selectstart`/`selectend` events (works with controllers!)
+   - `targetRaySpace` raycasting works for controller rays
+   - 3D position tracking already in world space
+   - Frame-based pose tracking (not screen coordinates)
+
+2. **Physics & Rendering**
+   - All Three.js and Cannon.js code is platform-agnostic
+   - PBR materials work on Quest
+   - Physics simulation identical across devices
+
+3. **Interaction System**
+   - `TouchHandler.js` is actually "InputHandler" - works with any XR input
+   - Drag and throw mechanics use 3D positions (no screen dependency)
+   - Collision detection platform-independent
+
+### Quest-Specific Enhancements Added
+
+#### 1. Multi-Input Support (`main.js:216-238`)
+
+```javascript
+_checkForTap(frame) {
+  // Now supports:
+  // - 'screen' (Android touch)
+  // - 'tracked-pointer' (Quest controllers) ✅ NEW
+  // - 'hand' (hand tracking) ✅ NEW
+  // - 'gaze' (gaze input) ✅ NEW
+
+  const supportedModes = ['screen', 'tracked-pointer', 'gaze', 'hand'];
+  // ...
+}
+```
+
+**Files**: `src/main.js:216-238`
+
+#### 2. Input Type Detection (`XRUtils.js`)
+
+```javascript
+// Detect what input device is active
+detectInputType(session)
+// Returns: 'controller', 'hand', 'touch', or 'gaze'
+
+// Get appropriate hint text
+getHintText(inputType, action)
+// Returns device-specific instructions
+```
+
+**Examples**:
+- Controller: "Point and pull trigger to place virtual desktop"
+- Touch: "Tap a surface to place virtual desktop"
+- Hand: "Point and pinch to place virtual desktop"
+
+**Files**: `src/utils/XRUtils.js:132-196`
+
+#### 3. Dynamic Hints (`main.js:102-106`)
+
+```javascript
+// Detect input type and show appropriate hint
+const inputType = detectInputType(this.session);
+const placementHint = getHintText(inputType, 'place');
+this.hintDisplay.showPlacementHint(placementHint);
+```
+
+**Files**: `src/main.js:102-106`, `src/ui/HintDisplay.js:16-33`
+
+### Testing on Meta Quest
+
+#### Expected Behavior
+
+1. **Session Start**
+   - Quest browser supports `immersive-ar` mode (passthrough)
+   - Input type detected as `'controller'`
+   - Hint: "Point and pull trigger to place virtual desktop"
+
+2. **Desktop Placement**
+   - Point controller at surface
+   - Pull trigger → desktop places
+
+3. **Plate Interaction**
+   - Point at plate, pull trigger → selection
+   - Hold trigger and move controller → drag
+   - Release trigger with motion → throw
+
+#### Potential Differences from Android
+
+| Aspect | Android | Meta Quest | Status |
+|--------|---------|------------|--------|
+| Input Mode | `'screen'` | `'tracked-pointer'` | ✅ Supported |
+| Selection | Tap | Trigger pull | ✅ Same API |
+| Drag Speed | Hand motion | Controller motion | ⚠️ May need tuning |
+| Throw Velocity | 0.18-0.41 m/s | Likely 0.5-2.0 m/s | ⚠️ May need tuning |
+| Frame Rate | 60 FPS target | 72/90 FPS capable | ✅ Physics adapts |
+| Reference Space | `'local'` | `'local'` or `'local-floor'` | ✅ Works |
+
+### Velocity Tuning for Controllers
+
+**Current Android Settings**:
+- Threshold: 0.2 m/s
+- Multiplier: 5.0x
+- Max velocity: 8.0 m/s
+
+**Expected Quest Adjustments** (if needed):
+```javascript
+// May need to detect input type and adjust multiplier
+if (inputType === 'controller') {
+  velocity3D.multiplyScalar(2.0); // Controllers move faster
+} else if (inputType === 'hand') {
+  velocity3D.multiplyScalar(5.0); // Hand tracking similar to phone
+} else {
+  velocity3D.multiplyScalar(5.0); // Touch (phone)
+}
+```
+
+**Action**: Test on Quest first, tune only if throws feel too weak/strong.
+
+### Quest-Specific Optimizations (Future)
+
+#### 1. Session Mode Options
+
+Currently requests `immersive-ar` only. Could add VR mode support:
+
+```javascript
+// Try AR first (passthrough), fallback to VR
+async function requestBestSession() {
+  try {
+    return await navigator.xr.requestSession('immersive-ar', config);
+  } catch (e) {
+    console.warn('AR not available, trying VR');
+    return await navigator.xr.requestSession('immersive-vr', config);
+  }
+}
+```
+
+#### 2. Hand Tracking API
+
+If Quest hand tracking available:
+```javascript
+if (source.hand) {
+  // Native hand tracking joints available
+  // Could show virtual hands grabbing plates
+}
+```
+
+#### 3. Haptic Feedback
+
+```javascript
+if (inputSource.gamepad?.hapticActuators?.length > 0) {
+  inputSource.gamepad.hapticActuators[0].pulse(0.5, 100);
+}
+```
+
+### Testing Checklist for Meta Quest
+
+- [ ] AR session starts successfully in Quest browser
+- [ ] Input type detected as `'controller'`
+- [ ] Hint text shows controller instructions
+- [ ] Surface detection works with controller ray
+- [ ] Trigger pull places desktop
+- [ ] Controller trigger selects plates
+- [ ] Drag feels responsive
+- [ ] Throw velocity feels appropriate (may need tuning)
+- [ ] Collisions work correctly
+- [ ] Frame rate maintains 72+ FPS
+- [ ] No console errors specific to Quest
+
+### Known Quest Limitations
+
+1. **No Canvas Touch Events**
+   - ✅ Already fixed - we don't use canvas touch events
+
+2. **Reference Space**
+   - Quest supports both `'local'` and `'local-floor'`
+   - Current implementation uses `'local'` (compatible)
+   - `'local-floor'` might provide better height alignment
+
+3. **Performance**
+   - Quest has more powerful GPU than most Android phones
+   - Could potentially support more plates or better graphics
+   - Current settings are conservative (should work well)
+
+### Deployment Notes for Quest
+
+1. **Same HTTPS Requirement**
+   - Quest browser requires HTTPS for WebXR
+   - Same deployment process as Android
+
+2. **Testing Access**
+   - Use Quest browser (not Meta Quest Browser beta)
+   - Access same URL as Android deployment
+   - Ensure site is accessible on local network if testing locally
+
+3. **Development**
+   - Can use browser devtools via USB debugging
+   - `chrome://inspect` on desktop Chrome
+   - Quest browser remote debugging works
+
+### Summary
+
+**TL;DR**: The implementation **should work immediately on Meta Quest** because we already use XR Input Sources API instead of canvas touch events. Quest-specific enhancements (input detection, dynamic hints) have been added. The only potential tuning needed is throw velocity multiplier if controllers feel too sensitive.
+
+**Next Steps**:
+1. Deploy to HTTPS server
+2. Test on Quest browser
+3. Tune velocity multiplier if needed (likely reduce from 5x to 2-3x for controllers)
+4. Consider adding haptic feedback
+
+**Branch**: `meta-quest-support`
