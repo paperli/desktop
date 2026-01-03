@@ -21,7 +21,8 @@ export class PhysicsWorld {
     });
 
     // Configure solver for better collision detection
-    this.world.solver.iterations = PHYSICS.SOLVER_ITERATIONS;
+    this.world.solver.iterations = 20; // Increased from 10 to prevent penetration
+    this.world.solver.tolerance = 0.001;
     this.world.allowSleep = false; // Disable sleep for now to ensure collisions work
 
     // Configure broadphase for better collision detection
@@ -45,8 +46,10 @@ export class PhysicsWorld {
       {
         friction: 0.4,
         restitution: 0.3, // Slight bounce when plates hit each other
-        contactEquationStiffness: 1e8,
+        contactEquationStiffness: 1e9, // Increased stiffness to prevent penetration
         contactEquationRelaxation: 3,
+        frictionEquationStiffness: 1e9,
+        frictionEquationRelaxation: 3,
       }
     );
     this.world.addContactMaterial(platePlateContact);
@@ -58,8 +61,10 @@ export class PhysicsWorld {
       {
         friction: 0.5,
         restitution: 0.1, // Less bounce on desktop surface
-        contactEquationStiffness: 1e8,
+        contactEquationStiffness: 1e9, // Very stiff to prevent penetration
         contactEquationRelaxation: 3,
+        frictionEquationStiffness: 1e9,
+        frictionEquationRelaxation: 3,
       }
     );
     this.world.addContactMaterial(plateDesktopContact);
@@ -79,17 +84,21 @@ export class PhysicsWorld {
     this.desktopBodies = [];
 
     // Create floor (desktop surface) with desktop material
+    // Make it thicker to prevent penetration
+    const floorThickness = DESKTOP.THICKNESS * 2; // Double thickness for better collision
     const floorBody = new CANNON.Body({
       type: CANNON.Body.STATIC,
       shape: new CANNON.Box(
-        new CANNON.Vec3(bounds.width / 2, DESKTOP.THICKNESS / 2, bounds.depth / 2)
+        new CANNON.Vec3(bounds.width / 2, floorThickness / 2, bounds.depth / 2)
       ),
       material: this.desktopMaterial,
+      collisionResponse: true,
     });
 
+    // Position the floor slightly lower to account for thickness
     floorBody.position.set(
       bounds.position.x,
-      bounds.position.y,
+      bounds.position.y - DESKTOP.THICKNESS / 2,
       bounds.position.z
     );
 
@@ -102,6 +111,8 @@ export class PhysicsWorld {
 
     this.world.addBody(floorBody);
     this.desktopBodies.push(floorBody);
+
+    console.log('Desktop floor created at y:', floorBody.position.y, 'with thickness:', floorThickness);
 
     // Create invisible boundary walls
     const wallHeight = DESKTOP.WALL_HEIGHT;
@@ -161,9 +172,10 @@ export class PhysicsWorld {
       floorBody.quaternion.vmult(localPos, rotatedPos);
 
       // Set wall position: desktop position + rotated local position + height offset
+      // Position walls at the floor level
       wallBody.position.set(
         bounds.position.x + rotatedPos.x,
-        bounds.position.y + DESKTOP.THICKNESS + wallHeight / 2,
+        bounds.position.y + wallHeight / 2 - DESKTOP.THICKNESS,
         bounds.position.z + rotatedPos.z
       );
 
