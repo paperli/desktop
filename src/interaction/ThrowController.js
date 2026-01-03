@@ -13,28 +13,37 @@ export class ThrowController {
   /**
    * Calculate and apply throw velocity to plate
    * @param {Plate} plate
-   * @param {Array} touchHistory - Array of {x, y, time} touch positions
+   * @param {Array|Object} touchHistoryOrVelocity - Array of {x, y, time} touch positions OR {x, y, z, speed} 3D velocity
    */
-  throwPlate(plate, touchHistory) {
-    // Calculate velocity from touch history
-    const velocity2D = calculateVelocity(touchHistory);
+  throwPlate(plate, touchHistoryOrVelocity) {
+    let velocity3D;
 
-    // Convert screen velocity to world velocity
-    // This is a simplified conversion - adjust scale as needed
-    const velocityScale = INTERACTION.THROW_VELOCITY_SCALE * 0.001;
+    // Check if we received a pre-calculated 3D velocity (from XR) or touch history (from 2D)
+    if (touchHistoryOrVelocity.speed !== undefined) {
+      // This is a 3D velocity object from XR
+      velocity3D = new THREE.Vector3(
+        touchHistoryOrVelocity.x,
+        touchHistoryOrVelocity.y,
+        touchHistoryOrVelocity.z
+      );
 
-    // Get camera direction for forward component
-    const cameraDirection = new THREE.Vector3();
-    this.camera.getWorldDirection(cameraDirection);
+      // Dampen Y component (vertical) to keep throws mostly horizontal on desktop
+      velocity3D.y *= 0.2;
 
-    // Create 3D velocity vector
-    // X component from horizontal swipe
-    // Z component from vertical swipe and camera direction
-    const velocity3D = new THREE.Vector3(
-      velocity2D.x * velocityScale,
-      0, // No upward velocity (constrained to desktop)
-      -velocity2D.y * velocityScale // Negative because screen Y is inverted
-    );
+    } else {
+      // This is touch history from 2D screen input
+      const velocity2D = calculateVelocity(touchHistoryOrVelocity);
+
+      // Convert screen velocity to world velocity
+      const velocityScale = INTERACTION.THROW_VELOCITY_SCALE * 0.001;
+
+      // Create 3D velocity vector
+      velocity3D = new THREE.Vector3(
+        velocity2D.x * velocityScale,
+        0, // No upward velocity (constrained to desktop)
+        -velocity2D.y * velocityScale // Negative because screen Y is inverted
+      );
+    }
 
     // Apply maximum velocity cap
     const speed = velocity3D.length();
@@ -59,7 +68,7 @@ export class ThrowController {
       angularVelocity.z
     );
 
-    console.log('Plate thrown with velocity:', velocity3D, 'Speed:', speed);
+    console.log('Plate thrown with velocity:', velocity3D, 'Speed:', speed.toFixed(2), 'm/s');
   }
 
   /**

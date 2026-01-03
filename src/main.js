@@ -293,9 +293,10 @@ class ARVirtualDesktop {
         this.dragController.endDrag(plate);
       };
 
-      this.touchHandler.onPlateThrown = (plate, touchHistory) => {
+      this.touchHandler.onPlateThrown = (plate, velocity) => {
+        console.log('Plate thrown callback triggered with velocity:', velocity);
         this.dragController.endDrag(plate);
-        this.throwController.throwPlate(plate, touchHistory);
+        this.throwController.throwPlate(plate, velocity);
       };
 
       // Hide surface overlay and placement hint

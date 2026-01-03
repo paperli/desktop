@@ -65,6 +65,36 @@ export function calculateVelocity(touchHistory) {
 }
 
 /**
+ * Calculate 3D velocity from XR position history
+ * @param {Array} positionHistory - Array of {x, y, z, time} position points
+ * @returns {Object} {x, y, z, speed} velocity in meters per second
+ */
+export function calculateVelocity3D(positionHistory) {
+  if (positionHistory.length < 2) {
+    return { x: 0, y: 0, z: 0, speed: 0 };
+  }
+
+  // Use last few samples for more accurate velocity (weighted towards recent motion)
+  const sampleCount = Math.min(5, positionHistory.length);
+  const recentHistory = positionHistory.slice(-sampleCount);
+
+  const last = recentHistory[recentHistory.length - 1];
+  const first = recentHistory[0];
+  const timeDelta = (last.time - first.time) / 1000; // Convert to seconds
+
+  if (timeDelta === 0) {
+    return { x: 0, y: 0, z: 0, speed: 0 };
+  }
+
+  const vx = (last.x - first.x) / timeDelta;
+  const vy = (last.y - first.y) / timeDelta;
+  const vz = (last.z - first.z) / timeDelta;
+  const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+
+  return { x: vx, y: vy, z: vz, speed };
+}
+
+/**
  * Check if a point is within bounds
  * @param {Object} point - {x, z} position
  * @param {Object} bounds - {minX, maxX, minZ, maxZ}

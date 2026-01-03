@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { screenToNDC } from '../utils/MathUtils.js';
+import { screenToNDC, calculateVelocity3D } from '../utils/MathUtils.js';
 import { INTERACTION } from '../config/constants.js';
 
 /**
@@ -86,9 +86,25 @@ export class TouchHandler {
 
     if (!this.selectedPlate) return;
 
-    // For now, just release the plate
-    // TODO: Implement velocity calculation for throw
-    this.onPlateReleased?.(this.selectedPlate, 'tap');
+    // Calculate velocity from position history
+    const velocity = calculateVelocity3D(this.touchHistory);
+
+    console.log('Release velocity:', velocity);
+
+    // Determine if this is a throw gesture based on speed
+    // Threshold: 0.5 m/s for XR (adjust as needed)
+    const throwSpeedThreshold = 0.5; // meters per second
+    const isThrow = velocity.speed > throwSpeedThreshold;
+
+    if (isThrow) {
+      console.log('Throw gesture detected! Speed:', velocity.speed.toFixed(2), 'm/s');
+      // Call throw callback with velocity
+      this.onPlateThrown?.(this.selectedPlate, velocity);
+    } else {
+      console.log('Tap/slow release detected. Speed:', velocity.speed.toFixed(2), 'm/s');
+      // Call release callback
+      this.onPlateReleased?.(this.selectedPlate, 'tap');
+    }
 
     // Reset state
     this.selectedPlate = null;
@@ -123,6 +139,18 @@ export class TouchHandler {
     const quaternion = new THREE.Quaternion();
     const scale = new THREE.Vector3();
     matrix.decompose(position, quaternion, scale);
+
+    // Track 3D position for velocity calculation
+    this.touchHistory.push({
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      time: Date.now()
+    });
+
+    // Keep only recent history (last 300ms worth of data)
+    const now = Date.now();
+    this.touchHistory = this.touchHistory.filter(point => (now - point.time) < 300);
 
     // Set ray origin and direction
     const direction = new THREE.Vector3(0, 0, -1);
