@@ -411,3 +411,357 @@ npm run dev
 - No session persistence across app restarts
 - Limited to ARCore-compatible Android devices
 - Requires HTTPS for WebXR API access
+
+---
+
+## Implementation Findings & Optimizations
+
+This section documents key learnings, issues encountered, and optimizations discovered during Android WebXR implementation.
+
+### 1. WebXR Reference Space Compatibility (Android Chrome)
+
+**Issue**: Initial implementation failed with `NotSupportedError: Failed to execute 'requestReferenceSpace' on 'XRSession'`
+
+**Root Cause**:
+- Incorrectly included `'local'` in `requiredFeatures` array
+- `'local'` is a reference space type, not a feature
+- Android Chrome doesn't support `'local-floor'` reference space
+
+**Solution**:
+```javascript
+// ❌ WRONG - Don't include reference space types in features
+requiredFeatures: ['hit-test', 'local']
+
+// ✅ CORRECT - Only include actual features
+requiredFeatures: ['hit-test']
+
+// Set reference space separately
+renderer.xr.setReferenceSpaceType('local'); // Use 'local', not 'local-floor'
+```
+
+**Files**: `src/config/constants.js:100-104`, `src/scene/SceneManager.js:52-63`
+
+**Key Takeaway**: Always use `'local'` reference space for Android WebXR. Include fallback to `'viewer'` for maximum compatibility.
+
+---
+
+### 2. Touch Input Events in WebXR AR Mode
+
+**Issue**: Canvas touch events (`touchstart`, `touchmove`, `touchend`) didn't fire during AR session. No interaction logs appeared.
+
+**Root Cause**:
+- Standard DOM touch events don't work in immersive WebXR sessions
+- Touch input must be accessed through XR Input Sources API
+- Frame-based raycasting required instead of screen-space coordinates
+
+**Solution**:
+```javascript
+// ❌ WRONG - Canvas touch events don't work in XR
+canvas.addEventListener('touchstart', handler);
+
+// ✅ CORRECT - Use XR session input events
+session.addEventListener('selectstart', handler);
+session.addEventListener('selectend', handler);
+
+// Raycasting must happen in render loop with XRFrame
+update(frame, referenceSpace) {
+  const inputPose = frame.getPose(inputSource.targetRaySpace, referenceSpace);
+  // Use pose.transform.matrix for raycasting
+}
+```
+
+**Files**: `src/interaction/TouchHandler.js:28-148`
+
+**Key Takeaway**: Never use canvas touch events in XR. Always use XR input sources with frame-based pose tracking.
+
+---
+
+### 3. Physics Collision Detection Requirements
+
+**Issue**: Plates passed through each other without colliding despite proper physics setup.
+
+**Root Cause**:
+- Each plate was creating its own `CANNON.Material` instance
+- Cannon.js requires **shared material instances** for collision detection
+- `ContactMaterial` must reference the exact same material objects
+
+**Solution**:
+```javascript
+// ❌ WRONG - Each plate creates own material
+class Plate {
+  constructor() {
+    this.body.material = new CANNON.Material('plate'); // ❌ New instance
+  }
+}
+
+// ✅ CORRECT - Share material instances
+class PhysicsWorld {
+  constructor() {
+    this.plateMaterial = new CANNON.Material('plate'); // Single instance
+
+    // Create contact material using shared references
+    const contact = new CANNON.ContactMaterial(
+      this.plateMaterial,
+      this.plateMaterial,
+      { friction: 0.25, restitution: 0.3 }
+    );
+    this.world.addContactMaterial(contact);
+  }
+
+  getPlateMaterial() {
+    return this.plateMaterial; // All plates use this
+  }
+}
+```
+
+**Files**: `src/physics/PhysicsWorld.js:39-70`, `src/objects/Plate.js:71`
+
+**Key Takeaway**: Always use shared CANNON.Material instances. One material per object type, referenced everywhere.
+
+---
+
+### 4. Dragged Plates Pushing Objects Through Floor
+
+**Issue**: When dragging one plate into another, the collided plate would fall through the desktop floor.
+
+**Root Cause (Iteration 1)**:
+- Initially tried using `mass=10000` for dragged plates to make them "heavy"
+- Created extreme force differential (10000 vs 0.3 kg)
+- Even with high contact stiffness, the forces were too large
+
+**Root Cause (Iteration 2)**:
+- Changed to kinematic body with `collisionResponse=false`
+- This **disabled all collisions** during drag, including plate-to-plate
+
+**Final Solution**:
+```javascript
+// ✅ CORRECT - Kinematic with collisions enabled
+setKinematic(kinematic) {
+  if (kinematic) {
+    this.body.type = CANNON.Body.KINEMATIC; // Follows input
+    this.body.velocity.setZero();
+    this.body.collisionResponse = true; // ✅ Keep enabled!
+    // Kinematic bodies push based on penetration depth, not mass
+  } else {
+    this.body.type = CANNON.Body.DYNAMIC;
+  }
+}
+```
+
+**Files**: `src/objects/Plate.js:119-136`
+
+**Key Takeaways**:
+- Kinematic bodies apply forces based on **penetration depth**, not mass
+- Always keep `collisionResponse=true` for proper collision during drag
+- Never use extreme mass values to control behavior
+
+---
+
+### 5. Surface Detection Visualization
+
+**Issue**: Desktop didn't match detected table size/orientation. Hard to debug without seeing actual detected surface.
+
+**Solution**: Show the actual detected plane geometry with wireframe borders
+```javascript
+// Create plane matching detected polygon size
+const geometry = new THREE.PlaneGeometry(surfaceWidth, surfaceDepth);
+
+// Add wireframe borders for clear visualization
+const edges = new THREE.EdgesGeometry(geometry);
+const border = new THREE.LineSegments(edges, borderMaterial);
+```
+
+**Files**: `src/ar/SurfaceDetector.js:72-130`
+
+**Optimization**: Desktop now uses 90% of detected surface dimensions for better fit.
+
+**Key Takeaway**: Always visualize detected surfaces during development. Makes debugging placement issues much easier.
+
+---
+
+### 6. Throw Gesture Velocity Tuning
+
+**Issue**: Throw gesture detected but plates didn't travel far enough. User feedback: "doesn't travel too much when I throw them hard"
+
+**Data Collected**: User throw velocities ranged from 0.18 to 0.41 m/s (hand tracking speed)
+
+**Iterations**:
+
+| Iteration | Threshold | Multiplier | Max Velocity | Result |
+|-----------|-----------|------------|--------------|--------|
+| 1 | 0.5 m/s | 2.5x | 5.0 m/s | ❌ Threshold too high, throws not detected |
+| 2 | 0.2 m/s | 2.5x | 5.0 m/s | ✅ Detected but too weak |
+| 3 | 0.2 m/s | 5.0x | 8.0 m/s | ✅ Good distance! |
+
+**Final Configuration**:
+```javascript
+// TouchHandler.js
+const throwSpeedThreshold = 0.2; // m/s - Hand tracking is slower than swipes
+
+// ThrowController.js
+velocity3D.multiplyScalar(5.0); // 5x amplification for satisfying throws
+velocity3D.y *= 0.2; // Dampen vertical to keep horizontal
+
+// constants.js
+MAX_THROW_VELOCITY: 8.0 // m/s cap (increased from 5.0)
+```
+
+**Files**: `src/interaction/TouchHandler.js:96`, `src/interaction/ThrowController.js:32`, `src/config/constants.js:44`
+
+**Key Takeaways**:
+- XR hand tracking velocities are **much slower** than 2D touch swipes
+- Need aggressive amplification (5x) for satisfying throw feel
+- Threshold of 0.2 m/s works well for differentiating tap vs throw
+- Always dampen Y component to keep throws on desktop plane
+
+---
+
+### 7. Friction Optimization for Momentum
+
+**Issue**: Even with good throw velocity, plates stopped too quickly. Friction too high.
+
+**Iterations**:
+
+| Friction | Plate-Desktop | Plate-Plate | Result |
+|----------|---------------|-------------|--------|
+| 0.4 | 0.5 | 0.4 | ❌ Too sticky, stopped too fast |
+| 0.25 | 0.25 | 0.25 | ✅ Good slide distance! |
+
+**Final Configuration**:
+```javascript
+// constants.js
+PLATE: {
+  FRICTION: 0.25, // Balanced for control + momentum
+}
+
+// PhysicsWorld.js - Use constant everywhere
+const plateDesktopContact = new CANNON.ContactMaterial(
+  this.plateMaterial,
+  this.desktopMaterial,
+  { friction: PLATE.FRICTION } // 0.25
+);
+```
+
+**Files**: `src/config/constants.js:10`, `src/physics/PhysicsWorld.js:47,62`
+
+**Key Takeaway**: Lower friction (0.25 vs 0.4) gives better momentum while maintaining control. Single source of truth in constants.
+
+---
+
+### 8. Physics Stability Improvements
+
+**Optimizations Applied**:
+```javascript
+// Solver configuration
+world.solver.iterations = 20; // Increased from 10
+world.solver.tolerance = 0.001;
+world.allowSleep = false; // Ensure collisions always detected
+
+// Broadphase optimization
+world.broadphase = new CANNON.SAPBroadphase(world); // More efficient
+
+// Contact stiffness
+contactEquationStiffness: 1e9, // Very high to prevent penetration
+contactEquationRelaxation: 3,
+
+// Floor thickness
+const floorThickness = DESKTOP.THICKNESS * 2; // Doubled for stability
+```
+
+**Files**: `src/physics/PhysicsWorld.js:24-115`
+
+---
+
+### 9. Plate Size Optimization
+
+**Original Spec**: 15cm × 15cm plates
+**Final Implementation**: 8cm × 8cm box plates
+
+**Rationale**:
+- 15cm felt too large in AR context
+- Smaller plates allow more dynamic interactions
+- Box shape (vs cylinder) more stable for stacking
+- 8cm is good balance between visibility and manageability
+
+**Files**: `src/config/constants.js:5-6,8`
+
+---
+
+### 10. Performance Optimizations
+
+**Implemented**:
+- Fixed time step physics: `1/60` seconds
+- Max sub-steps: 3 (prevents physics spiral of death)
+- Velocity clamping: 5 m/s during drag, 8 m/s for throws
+- Low damping: 0.01 linear, 0.05 angular (responsive feel)
+- Position safety constraints: Reset if below desktop
+
+**Files**: `src/config/constants.js:31-38`, `src/objects/Plate.js:98-111`
+
+---
+
+## Final Tuned Constants
+
+```javascript
+// Optimized values discovered through testing
+export const PLATE = {
+  MAX_WIDTH: 0.08,    // 8cm (reduced from 15cm)
+  FRICTION: 0.25,     // Low for momentum (reduced from 0.4)
+  MASS: 0.3,          // kg
+  SHAPE: 'box',       // More stable than cylinder
+};
+
+export const INTERACTION = {
+  MAX_THROW_VELOCITY: 8.0,  // m/s (increased from 5.0)
+};
+
+// XR-specific (not in constants file)
+THROW_THRESHOLD: 0.2,        // m/s (for hand tracking)
+XR_VELOCITY_MULTIPLIER: 5.0, // Amplify hand velocity
+VERTICAL_DAMPING: 0.2,       // Keep throws horizontal
+```
+
+---
+
+## Testing Recommendations
+
+### Device-Specific Testing
+- **Android Chrome**: Primary target, all features working
+- **Meta Quest**: Fast-follow, may need controller input mapping
+- Test on multiple Android devices (different ARCore versions)
+
+### Performance Monitoring
+```javascript
+// Add to render loop for debugging
+console.log('FPS:', (1000 / deltaTime).toFixed(0));
+console.log('Active bodies:', physicsWorld.bodies.length);
+console.log('Collisions/frame:', collisionCount);
+```
+
+### Physics Debugging
+```javascript
+// Enable collision logging
+world.addEventListener('beginContact', (event) => {
+  console.log('Collision:', event.bodyA.mass, event.bodyB.mass);
+});
+```
+
+---
+
+## Critical Success Factors
+
+✅ **Use XR Input Sources** - Never rely on canvas touch events
+✅ **Shared Materials** - Single instance per object type for collisions
+✅ **Kinematic Dragging** - With `collisionResponse=true`
+✅ **Low Friction** - 0.25 for good momentum
+✅ **Velocity Amplification** - 5x multiplier for XR hand tracking
+✅ **Local Reference Space** - Not 'local-floor' on Android
+
+---
+
+## Open Questions for Future Optimization
+
+1. **Device Variability**: How do throw velocities vary across different Android devices?
+2. **Hand Tracking**: Would native hand tracking (vs screen tap) provide better velocity data?
+3. **Multiple Desktops**: How to manage physics boundaries with multiple surfaces?
+4. **Performance Scaling**: How many plates can we support before FPS drops?
