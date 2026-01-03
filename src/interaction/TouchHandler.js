@@ -92,8 +92,8 @@ export class TouchHandler {
     console.log('Release velocity:', velocity);
 
     // Determine if this is a throw gesture based on speed
-    // Threshold: 0.5 m/s for XR (adjust as needed)
-    const throwSpeedThreshold = 0.5; // meters per second
+    // Threshold: 0.2 m/s for XR (hand tracking movements are typically slower than swipes)
+    const throwSpeedThreshold = 0.2; // meters per second
     const isThrow = velocity.speed > throwSpeedThreshold;
 
     if (isThrow) {
