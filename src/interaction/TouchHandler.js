@@ -41,8 +41,11 @@ export class TouchHandler {
     const intersectedPlate = this._raycastPlates(touch.clientX, touch.clientY);
 
     if (intersectedPlate) {
+      console.log('Plate selected!');
       this.selectedPlate = intersectedPlate;
       this.onPlateSelected?.(intersectedPlate);
+    } else {
+      console.log('No plate detected at touch position');
     }
   }
 
@@ -103,12 +106,18 @@ export class TouchHandler {
     // Get all plate meshes
     const plateMeshes = this.plateSpawner.getPlates().map(plate => plate.getMesh());
 
+    console.log('Raycasting with NDC:', ndc, 'Plate count:', plateMeshes.length);
+
     // Perform raycasting
     const intersects = this.raycaster.intersectObjects(plateMeshes, false);
 
+    console.log('Intersects found:', intersects.length);
+
     if (intersects.length > 0) {
       const mesh = intersects[0].object;
-      return this.plateSpawner.findPlateByMesh(mesh);
+      const plate = this.plateSpawner.findPlateByMesh(mesh);
+      console.log('Plate found:', plate);
+      return plate;
     }
 
     return null;

@@ -124,20 +124,29 @@ export class PhysicsWorld {
         ),
       });
 
-      // Position relative to desktop
+      // Position walls on the desktop surface, at the edges
+      // Wall position in local space
+      const localPos = new CANNON.Vec3(wall.x, wallHeight / 2, wall.z);
+
+      // Apply desktop rotation to the local position
+      const rotatedPos = new CANNON.Vec3();
+      floorBody.quaternion.vmult(localPos, rotatedPos);
+
+      // Set wall position: desktop position + rotated local position + height offset
       wallBody.position.set(
-        bounds.position.x + wall.x,
-        bounds.position.y + wallHeight / 2 + DESKTOP.THICKNESS,
-        bounds.position.z + wall.z
+        bounds.position.x + rotatedPos.x,
+        bounds.position.y + DESKTOP.THICKNESS + wallHeight / 2,
+        bounds.position.z + rotatedPos.z
       );
 
+      // Apply same rotation as desktop
       wallBody.quaternion.copy(floorBody.quaternion);
 
       this.world.addBody(wallBody);
       this.desktopBodies.push(wallBody);
     });
 
-    console.log('Desktop boundaries created');
+    console.log('Desktop boundaries created with wall height:', wallHeight);
   }
 
   /**

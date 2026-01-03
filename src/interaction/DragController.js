@@ -23,9 +23,19 @@ export class DragController {
     const planeGeometry = new THREE.PlaneGeometry(100, 100);
     planeGeometry.rotateX(-Math.PI / 2); // Make it horizontal
 
-    this.dragPlane = new THREE.Mesh(planeGeometry);
-    this.dragPlane.visible = false;
+    // Create material for the plane (invisible but raycast-able)
+    const planeMaterial = new THREE.MeshBasicMaterial({
+      visible: false, // Don't render it
+      side: THREE.DoubleSide
+    });
+
+    this.dragPlane = new THREE.Mesh(planeGeometry, planeMaterial);
+    this.dragPlane.visible = true; // Must be visible for raycasting (but material is invisible)
     this.dragPlane.position.y = this.desktopBounds.centerY;
+
+    // Add to scene so raycasting can work
+    this.sceneManager.add(this.dragPlane);
+    console.log('Drag plane created at height:', this.desktopBounds.centerY);
   }
 
   /**
@@ -33,6 +43,7 @@ export class DragController {
    * @param {Plate} plate
    */
   startDrag(plate) {
+    console.log('Starting drag on plate');
     plate.setKinematic(true);
   }
 
@@ -51,6 +62,8 @@ export class DragController {
 
     // Intersect with drag plane
     const intersects = this.raycaster.intersectObject(this.dragPlane);
+
+    console.log('Drag update - intersects:', intersects.length);
 
     if (intersects.length > 0) {
       const intersectPoint = intersects[0].point;
@@ -86,6 +99,9 @@ export class DragController {
       );
 
       plate.setPosition(smoothedPos);
+      console.log('Plate position updated to:', smoothedPos);
+    } else {
+      console.warn('No intersection with drag plane');
     }
   }
 
@@ -113,7 +129,11 @@ export class DragController {
    */
   dispose() {
     if (this.dragPlane) {
+      this.sceneManager.remove(this.dragPlane);
       this.dragPlane.geometry.dispose();
+      if (this.dragPlane.material) {
+        this.dragPlane.material.dispose();
+      }
       this.dragPlane = null;
     }
   }

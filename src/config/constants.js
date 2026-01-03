@@ -2,29 +2,29 @@
 
 // Plate Physics & Dimensions
 export const PLATE = {
-  MAX_WIDTH: 0.15, // 15cm maximum width
-  MAX_DEPTH: 0.15, // 15cm maximum depth
-  HEIGHT: 0.025,   // 2.5cm height
-  SHAPE: 'cylinder', // 'cylinder' for circular plates, 'box' for square plates
-  MASS: 0.5,       // kg
-  FRICTION: 0.3,
-  RESTITUTION: 0.4, // Bounciness (0 = no bounce, 1 = perfect bounce)
+  MAX_WIDTH: 0.08,  // 8cm width (reduced from 15cm)
+  MAX_DEPTH: 0.08,  // 8cm depth (reduced from 15cm)
+  HEIGHT: 0.025,    // 2.5cm height (keep thickness)
+  SHAPE: 'box',     // 'cylinder' for circular plates, 'box' for square plates
+  MASS: 0.3,        // kg (reduced mass for smaller size)
+  FRICTION: 0.4,    // Increased friction to prevent sliding off
+  RESTITUTION: 0.3, // Bounciness (0 = no bounce, 1 = perfect bounce)
 };
 
 // Plate Spawning
 export const SPAWN = {
   MIN_PLATES: 5,
   MAX_PLATES: 8,
-  INITIAL_HEIGHT: 0.3, // Height above desktop to spawn (for drop effect)
-  MIN_SPACING: 0.05,   // Minimum distance between plates
+  INITIAL_HEIGHT: 0.15, // Height above desktop to spawn (reduced for faster settle)
+  MIN_SPACING: 0.10,    // Minimum distance between plates (increased for boxes)
 };
 
 // Desktop Properties
 export const DESKTOP = {
-  MIN_SIZE: 0.4,  // Minimum desktop size (0.4m x 0.4m)
-  MAX_SIZE: 2.0,  // Maximum desktop size (2m x 2m)
-  THICKNESS: 0.02, // Desktop thickness
-  WALL_HEIGHT: 0.1, // Invisible boundary wall height
+  MIN_SIZE: 0.4,    // Minimum desktop size (0.4m x 0.4m)
+  MAX_SIZE: 2.0,    // Maximum desktop size (2m x 2m)
+  THICKNESS: 0.02,  // Desktop thickness
+  WALL_HEIGHT: 0.15, // Invisible boundary wall height (increased)
 };
 
 // Physics World
