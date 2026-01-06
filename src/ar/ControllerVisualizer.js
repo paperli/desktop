@@ -4,14 +4,15 @@ import * as THREE from 'three';
  * Visualizes XR controllers with rays for better user feedback
  */
 export class ControllerVisualizer {
-  constructor(session, sceneManager) {
+  constructor(session, sceneManager, surfaceDetector = null) {
     this.session = session;
     this.sceneManager = sceneManager;
+    this.surfaceDetector = surfaceDetector; // For checking plane intersections
 
     // Track controller visualizations
-    this.controllers = new Map(); // inputSource.id -> {ray, pointer}
+    this.controllers = new Map(); // inputSource.id -> {ray, pointer, disc}
 
-    this.rayLength = 5.0; // 5 meters
+    this.maxRayLength = 5.0; // 5 meters (maximum)
     this.isActive = true;
   }
 
@@ -71,10 +72,10 @@ export class ControllerVisualizer {
     const pointer = new THREE.Mesh(pointerGeometry, pointerMaterial);
     this.sceneManager.add(pointer);
 
-    // Create ray line
+    // Create ray line (will be updated dynamically based on intersections)
     const rayGeometry = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, 0, -this.rayLength)
+      new THREE.Vector3(0, 0, -this.maxRayLength)
     ]);
     const rayMaterial = new THREE.LineBasicMaterial({
       color: rayMode === 'hand' ? 0xff6b6b : 0x00bcd4,
@@ -85,20 +86,23 @@ export class ControllerVisualizer {
     const ray = new THREE.Line(rayGeometry, rayMaterial);
     this.sceneManager.add(ray);
 
-    // Create ray end indicator (small ring)
-    const ringGeometry = new THREE.RingGeometry(0.02, 0.03, 16);
-    const ringMaterial = new THREE.MeshBasicMaterial({
+    // Create intersection disc (shown when ray hits a plane)
+    const discGeometry = new THREE.CircleGeometry(0.01, 32); // 1cm disc
+    const discMaterial = new THREE.MeshBasicMaterial({
       color: rayMode === 'hand' ? 0xff6b6b : 0x00bcd4,
       transparent: true,
-      opacity: 0.5,
+      opacity: 0.9,
       side: THREE.DoubleSide,
+      depthTest: true,
+      depthWrite: false, // Prevent z-fighting
     });
-    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-    ring.rotation.x = -Math.PI / 2; // Face upward
-    this.sceneManager.add(ring);
+    const disc = new THREE.Mesh(discGeometry, discMaterial);
+    disc.renderOrder = 999; // Render on top to avoid z-fighting
+    disc.visible = false; // Hidden by default
+    this.sceneManager.add(disc);
 
     // Store references
-    this.controllers.set(id, { pointer, ray, ring });
+    this.controllers.set(id, { pointer, ray, disc });
 
     console.log(`Controller visualization created for ${rayMode} input`);
   }
@@ -112,7 +116,7 @@ export class ControllerVisualizer {
     const viz = this.controllers.get(id);
     if (!viz) return;
 
-    const { pointer, ray, ring } = viz;
+    const { pointer, ray, disc } = viz;
 
     // Extract position and orientation from pose
     const position = new THREE.Vector3(
@@ -131,21 +135,63 @@ export class ControllerVisualizer {
     // Update pointer position
     pointer.position.copy(position);
 
-    // Update ray position and orientation
+    // Get ray direction in world space
+    const rayDirection = new THREE.Vector3(0, 0, -1);
+    rayDirection.applyQuaternion(quaternion).normalize();
+
+    // Check for plane intersections
+    let rayLength = this.maxRayLength;
+    let hitPoint = null;
+    let hitNormal = null;
+    let hitMesh = null;
+
+    if (this.surfaceDetector && this.surfaceDetector.planeMeshes) {
+      const raycaster = new THREE.Raycaster(position, rayDirection);
+      let closestDistance = Infinity;
+
+      this.surfaceDetector.planeMeshes.forEach((mesh) => {
+        const intersects = raycaster.intersectObject(mesh, false);
+        if (intersects.length > 0) {
+          const distance = intersects[0].distance;
+          if (distance < closestDistance) {
+            closestDistance = distance;
+            hitPoint = intersects[0].point;
+            hitNormal = intersects[0].face ? intersects[0].face.normal.clone() : null;
+            hitMesh = mesh;
+            rayLength = distance;
+          }
+        }
+      });
+    }
+
+    // Update ray geometry with new length (in LOCAL space of the ray object)
+    // The ray naturally points along -Z in its local space, so we just set the length
+    const rayEndLocal = new THREE.Vector3(0, 0, -rayLength);
+    ray.geometry.setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      rayEndLocal
+    ]);
     ray.position.copy(position);
     ray.quaternion.copy(quaternion);
 
-    // Calculate ray end position for ring
-    const rayDirection = new THREE.Vector3(0, 0, -1);
-    rayDirection.applyQuaternion(quaternion);
-    const rayEnd = position.clone().add(rayDirection.multiplyScalar(this.rayLength));
+    // Update disc visibility and position
+    if (hitPoint && hitNormal && hitMesh) {
+      disc.visible = true;
 
-    ring.position.copy(rayEnd);
-    // Orient ring perpendicular to ray
-    const ringRotation = new THREE.Euler().setFromQuaternion(quaternion);
-    ring.rotation.x = ringRotation.x - Math.PI / 2;
-    ring.rotation.y = ringRotation.y;
-    ring.rotation.z = ringRotation.z;
+      // Transform normal from mesh local space to world space
+      const worldNormal = hitNormal.clone()
+        .transformDirection(hitMesh.matrixWorld)
+        .normalize();
+
+      // Offset the disc slightly above the surface to prevent z-fighting
+      const offsetDistance = 0.002; // 2mm offset
+      disc.position.copy(hitPoint).add(worldNormal.clone().multiplyScalar(offsetDistance));
+
+      // Orient disc perpendicular to the hit surface
+      disc.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), worldNormal);
+    } else {
+      disc.visible = false;
+    }
   }
 
   /**
@@ -156,20 +202,20 @@ export class ControllerVisualizer {
     const viz = this.controllers.get(id);
     if (!viz) return;
 
-    const { pointer, ray, ring } = viz;
+    const { pointer, ray, disc } = viz;
 
     // Remove from scene
     this.sceneManager.remove(pointer);
     this.sceneManager.remove(ray);
-    this.sceneManager.remove(ring);
+    this.sceneManager.remove(disc);
 
     // Dispose geometries and materials
     pointer.geometry.dispose();
     pointer.material.dispose();
     ray.geometry.dispose();
     ray.material.dispose();
-    ring.geometry.dispose();
-    ring.material.dispose();
+    disc.geometry.dispose();
+    disc.material.dispose();
 
     this.controllers.delete(id);
   }
@@ -192,7 +238,7 @@ export class ControllerVisualizer {
     for (const [id, viz] of this.controllers.entries()) {
       viz.pointer.visible = true;
       viz.ray.visible = true;
-      viz.ring.visible = true;
+      // disc visibility is controlled by intersection detection
     }
   }
 
@@ -204,7 +250,7 @@ export class ControllerVisualizer {
     for (const [id, viz] of this.controllers.entries()) {
       viz.pointer.visible = false;
       viz.ray.visible = false;
-      viz.ring.visible = false;
+      viz.disc.visible = false;
     }
   }
 

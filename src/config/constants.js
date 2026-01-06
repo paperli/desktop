@@ -99,6 +99,6 @@ export const PERFORMANCE = {
 // WebXR Session Configuration
 export const XR_CONFIG = {
   sessionMode: 'immersive-ar',
-  requiredFeatures: ['hit-test'],
-  optionalFeatures: ['anchors', 'plane-detection'], // plane-detection enables polygon data
+  requiredFeatures: [], // No required features - maximize compatibility
+  optionalFeatures: ['local', 'local-floor', 'viewer', 'plane-detection', 'hit-test', 'anchors'],
 };

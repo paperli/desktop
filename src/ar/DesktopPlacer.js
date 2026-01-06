@@ -16,7 +16,7 @@ export class DesktopPlacer {
   }
 
   /**
-   * Place desktop at hit test result location
+   * Place desktop at hit test result location (legacy method - kept for compatibility)
    * @param {XRHitTestResult} hitTestResult
    * @param {XRFrame} frame
    * @param {XRReferenceSpace} referenceSpace
@@ -66,6 +66,64 @@ export class DesktopPlacer {
       return this.desktopBounds;
     } catch (error) {
       console.error('Failed to place desktop:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Place desktop on a detected XRPlane
+   * @param {XRPlane} plane - Detected plane from frame.detectedPlanes
+   * @param {XRFrame} frame
+   * @param {XRReferenceSpace} referenceSpace
+   * @param {Object} detectedSize - Detected plane size {width, depth}
+   * @returns {Object} Desktop bounds for physics
+   */
+  async placeDesktopOnPlane(plane, frame, referenceSpace, detectedSize = null) {
+    if (this.isPlaced) {
+      console.warn('Desktop already placed');
+      return this.desktopBounds;
+    }
+
+    try {
+      // Get pose from plane's space
+      const pose = frame.getPose(plane.planeSpace, referenceSpace);
+      if (!pose) {
+        throw new Error('Failed to get pose from plane');
+      }
+
+      // Extract position and orientation
+      const position = new THREE.Vector3(
+        pose.transform.position.x,
+        pose.transform.position.y,
+        pose.transform.position.z
+      );
+
+      const orientation = new THREE.Quaternion(
+        pose.transform.orientation.x,
+        pose.transform.orientation.y,
+        pose.transform.orientation.z,
+        pose.transform.orientation.w
+      );
+
+      console.log('Placing desktop at plane position:', position);
+      console.log('Plane orientation:', plane.orientation);
+
+      // Create desktop with detected size
+      this._createDesktop(position, orientation, detectedSize);
+
+      // Try to create anchor for persistent placement
+      try {
+        const anchor = await frame.createAnchor(pose.transform, plane.planeSpace);
+        console.log('Anchor created successfully on plane');
+        this.anchor = anchor;
+      } catch (error) {
+        console.warn('Failed to create anchor on plane, desktop may not persist', error);
+      }
+
+      this.isPlaced = true;
+      return this.desktopBounds;
+    } catch (error) {
+      console.error('Failed to place desktop on plane:', error);
       throw error;
     }
   }

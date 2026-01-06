@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { getXRReferenceSpace, requestHitTestSource } from '../utils/XRUtils.js';
 
 /**
- * Handles WebXR hit testing for surface detection
+ * Handles WebXR plane detection for surface detection
+ * Uses native plane detection API (frame.detectedPlanes) instead of hit testing
  */
 export class SurfaceDetector {
   constructor(session, sceneManager, materialLibrary) {
@@ -10,33 +10,26 @@ export class SurfaceDetector {
     this.sceneManager = sceneManager;
     this.materialLibrary = materialLibrary;
 
-    this.hitTestSource = null;
-    this.referenceSpace = null;
-    this.surfaceOverlay = null;
+    this.planeMeshes = new Map(); // Store meshes for each detected plane
     this.isReady = false;
-    this.lastValidHitTime = 0; // Track when we last had a valid hit (for stability)
-    this.stableHitCount = 0; // Count consecutive valid hits before showing overlay
-    this.lastHitPose = null; // Store last valid pose for stability
-    this.lastLoggedState = null; // Track last logged state to reduce console spam
-    this.lockedSurfaceHeight = null; // Lock onto specific surface height
-    this.overlaySize = { width: 0.8, depth: 0.6 }; // Fixed size, no dynamic resizing
+    this.selectedPlane = null; // Currently selected plane for desktop placement
+    this.planeDetectionSupported = false;
+    this.currentPointedPlane = null; // Track which plane is being pointed at
 
     this._initialize();
   }
 
   async _initialize() {
     try {
-      // Get reference space
-      this.referenceSpace = await getXRReferenceSpace(this.session, 'viewer');
+      // Check if plane detection is enabled
+      this.planeDetectionSupported = this.session.enabledFeatures &&
+                                     this.session.enabledFeatures.includes('plane-detection');
 
-      // Request hit test source for horizontal planes
-      this.hitTestSource = await requestHitTestSource(
-        this.session,
-        this.referenceSpace
-      );
-
-      // Create visual overlay for detected surfaces
-      this._createSurfaceOverlay();
+      if (this.planeDetectionSupported) {
+        console.log('✅ Plane detection enabled');
+      } else {
+        console.warn('⚠️ Plane detection not supported - will not show detected surfaces');
+      }
 
       this.isReady = true;
     } catch (error) {
@@ -44,254 +37,390 @@ export class SurfaceDetector {
     }
   }
 
-  _createSurfaceOverlay() {
-    // Create a plane overlay mesh to show detected surfaces
-    // Fixed size for stability - we don't resize dynamically
-    // 0.8m x 0.6m is a typical table/surface size
-    const geometry = new THREE.PlaneGeometry(this.overlaySize.width, this.overlaySize.depth);
-    const material = this.materialLibrary.getSurfaceOverlayMaterial();
+  /**
+   * Create a mesh for a detected plane
+   * @returns {THREE.Mesh} Plane visualization mesh
+   */
+  _createPlaneMesh() {
+    // Create a mesh with semi-transparent material and random color
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(Math.random(), Math.random(), Math.random()),
+      transparent: true,
+      opacity: 0.5,
+      side: THREE.DoubleSide,
+      wireframe: false
+    });
 
-    this.surfaceOverlay = new THREE.Mesh(geometry, material);
-    this.surfaceOverlay.rotation.x = -Math.PI / 2; // Lay flat
-    this.surfaceOverlay.visible = false;
+    const mesh = new THREE.Mesh(geometry, material);
 
-    this.sceneManager.add(this.surfaceOverlay);
+    // Add wireframe outline for better visibility
+    const edges = new THREE.EdgesGeometry(geometry);
+    const line = new THREE.LineSegments(
+      edges,
+      new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 })
+    );
+    mesh.add(line);
 
-    // Create a wireframe border to show the exact edges
-    const edgesGeometry = new THREE.EdgesGeometry(geometry);
-    const edgesMaterial = new THREE.LineBasicMaterial({ color: 0x00bcd4, linewidth: 2 });
-    this.surfaceEdges = new THREE.LineSegments(edgesGeometry, edgesMaterial);
-    this.surfaceEdges.rotation.x = -Math.PI / 2;
-    this.surfaceEdges.visible = false;
-    this.sceneManager.add(this.surfaceEdges);
-
-    this.lastHitResult = null;
+    return mesh;
   }
 
   /**
-   * Update hit test and surface overlay visualization
-   * @param {XRFrame} frame
-   * @param {XRReferenceSpace} localReferenceSpace
-   * @returns {XRHitTestResult|null} Most recent hit test result
+   * Create geometry from plane polygon points
+   * @param {Array} polygon - Array of DOMPointReadOnly vertices
+   * @returns {THREE.BufferGeometry} Triangulated plane geometry
    */
-  update(frame, localReferenceSpace) {
-    if (!this.isReady || !this.hitTestSource) {
-      return null;
+  _createPlaneGeometryFromPolygon(polygon) {
+    const vertices = [];
+    const indices = [];
+
+    // Add vertices
+    for (let i = 0; i < polygon.length; i++) {
+      vertices.push(polygon[i].x, polygon[i].y, polygon[i].z);
     }
 
-    // Get hit test results
-    const hitTestResults = frame.getHitTestResults(this.hitTestSource);
+    // Triangulate polygon (simple fan triangulation from first vertex)
+    for (let i = 1; i < polygon.length - 1; i++) {
+      indices.push(0, i, i + 1);
+    }
 
-    if (hitTestResults.length > 0) {
-      const hit = hitTestResults[0];
-      const pose = hit.getPose(localReferenceSpace);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
 
-      if (pose) {
-        const hitHeight = pose.transform.position.y;
-        const hitDistance = Math.sqrt(
-          pose.transform.position.x ** 2 +
-          pose.transform.position.z ** 2
-        );
+    return geometry;
+  }
 
-        // Filter out non-horizontal planes (walls, tilted surfaces)
-        if (!this._isHorizontalPlane(pose)) {
-          this.stableHitCount = 0;
-          const timeSinceLastHit = Date.now() - this.lastValidHitTime;
-          if (timeSinceLastHit > 500) {
-            this.surfaceOverlay.visible = false;
-            if (this.surfaceEdges) this.surfaceEdges.visible = false;
-            this.lockedSurfaceHeight = null; // Unlock
-          }
-          return null;
+  /**
+   * Update plane detection and visualize detected planes
+   * @param {XRFrame} frame
+   * @param {XRReferenceSpace} referenceSpace
+   */
+  update(frame, referenceSpace) {
+    if (!this.isReady || !this.planeDetectionSupported) {
+      return;
+    }
+
+    // Get detected planes from the frame
+    const detectedPlanes = frame.detectedPlanes;
+
+    if (!detectedPlanes) {
+      return;
+    }
+
+    // Track which planes are still active
+    const activePlanes = new Set();
+
+    // Update or create meshes for detected planes
+    detectedPlanes.forEach((plane) => {
+      // Only process horizontal planes
+      if (plane.orientation !== 'horizontal') {
+        return;
+      }
+
+      // Get plane pose to check height
+      const pose = frame.getPose(plane.planeSpace, referenceSpace);
+      if (!pose) {
+        return;
+      }
+
+      const planeHeight = pose.transform.position.y;
+
+      // FILTER OUT CEILING: Reject planes above 2.0m (typical ceiling height)
+      if (planeHeight > 2.0) {
+        console.log(`Ceiling rejected - too high (${planeHeight.toFixed(2)}m)`);
+        return;
+      }
+
+      // FILTER OUT LARGE FLOOR: Reject very large planes below 0.5m (likely floor)
+      if (planeHeight < 0.5 && plane.polygon) {
+        const area = this._calculatePolygonArea(plane.polygon);
+        if (area > 3.0) { // Floor is usually > 3 square meters
+          console.log(`Floor rejected - too low and large (${planeHeight.toFixed(2)}m, ${area.toFixed(2)}m²)`);
+          return;
         }
+      }
 
-        // HEIGHT FILTERING: Prefer surfaces that are elevated (tables, not floor)
-        // Floor is typically at Y=0 or very low
-        // Tables are typically 0.4m - 1.2m high
-        // If we haven't locked onto a surface yet, prefer elevated surfaces
-        if (!this.lockedSurfaceHeight) {
-          // Reject floor (surfaces below 0.3m unless very close)
-          if (hitHeight < 0.3 && hitDistance > 1.0) {
-            console.log(`Surface rejected - too low (${hitHeight.toFixed(2)}m), likely floor`);
-            return null;
-          }
-          // Prefer elevated surfaces
-          if (hitHeight > 0.35 && hitHeight < 1.5) {
-            console.log(`Surface accepted - good table height (${hitHeight.toFixed(2)}m)`);
-          }
-        } else {
-          // Once locked, only accept surfaces at similar height (±15cm)
-          const heightDiff = Math.abs(hitHeight - this.lockedSurfaceHeight);
-          if (heightDiff > 0.15) {
-            console.log(`Surface rejected - height mismatch (${hitHeight.toFixed(2)}m vs locked ${this.lockedSurfaceHeight.toFixed(2)}m)`);
-            return null;
-          }
+      activePlanes.add(plane);
+
+      let mesh = this.planeMeshes.get(plane);
+
+      if (!mesh) {
+        // Create new mesh for this plane
+        mesh = this._createPlaneMesh();
+        this.planeMeshes.set(plane, mesh);
+        this.sceneManager.add(mesh);
+        console.log(`Table surface detected at height ${planeHeight.toFixed(2)}m`);
+      }
+
+      // Update mesh geometry and position
+      this._updatePlaneMesh(mesh, plane, frame, referenceSpace);
+    });
+
+    // Remove meshes for planes that are no longer detected
+    this.planeMeshes.forEach((mesh, plane) => {
+      if (!activePlanes.has(plane)) {
+        this.sceneManager.remove(mesh);
+        mesh.geometry.dispose();
+        mesh.material.dispose();
+        // Dispose wireframe child
+        if (mesh.children[0]) {
+          mesh.children[0].geometry.dispose();
+          mesh.children[0].material.dispose();
         }
+        this.planeMeshes.delete(plane);
+        console.log('Plane removed (no longer detected)');
+      }
+    });
 
-        // DISTANCE FILTERING: Prefer closer surfaces (within reasonable range)
-        if (hitDistance > 3.0) {
-          console.log(`Surface rejected - too far (${hitDistance.toFixed(2)}m)`);
-          return null;
-        }
+    // Update highlighting for plane being pointed at
+    this._updatePointedPlaneHighlight(frame, referenceSpace);
+  }
 
-        // Valid horizontal surface detected at appropriate height/distance
-        this.lastValidHitTime = Date.now();
-        this.lastHitPose = pose;
-        this.stableHitCount++;
+  /**
+   * Update visual highlight for the plane being pointed at
+   * @param {XRFrame} frame
+   * @param {XRReferenceSpace} referenceSpace
+   */
+  _updatePointedPlaneHighlight(frame, referenceSpace) {
+    const pointedPlane = this._getPointedPlaneInternal(frame, referenceSpace);
 
-        // Require at least 5 consecutive hits before showing overlay (strong stability)
-        if (this.stableHitCount < 5) {
-          return null;
-        }
-
-        // Lock onto this surface height on first display
-        if (this.stableHitCount === 5) {
-          this.lockedSurfaceHeight = hitHeight;
-          console.log(`🔒 LOCKED onto surface at height ${hitHeight.toFixed(2)}m, distance ${hitDistance.toFixed(2)}m`);
-        }
-
-        // Store the hit result
-        this.lastHitResult = hit;
-
-        // Update overlay position and orientation
-        this.surfaceOverlay.visible = true;
-        this.surfaceOverlay.position.set(
-          pose.transform.position.x,
-          pose.transform.position.y,
-          pose.transform.position.z
-        );
-
-        // Update rotation to match detected plane orientation
-        this.surfaceOverlay.quaternion.set(
-          pose.transform.orientation.x,
-          pose.transform.orientation.y,
-          pose.transform.orientation.z,
-          pose.transform.orientation.w
-        );
-
-        // Rotate to lay flat
-        this.surfaceOverlay.rotateX(-Math.PI / 2);
-
-        // Update edges to match
-        if (this.surfaceEdges) {
-          this.surfaceEdges.visible = true;
-          this.surfaceEdges.position.copy(this.surfaceOverlay.position);
-          this.surfaceEdges.quaternion.copy(this.surfaceOverlay.quaternion);
-        }
-
-        return hit;
+    // Reset previous highlighted plane
+    if (this.currentPointedPlane && this.currentPointedPlane !== pointedPlane) {
+      const prevMesh = this.planeMeshes.get(this.currentPointedPlane);
+      if (prevMesh && prevMesh.material) {
+        // Reset to normal opacity
+        prevMesh.material.opacity = 0.5;
       }
     }
 
-    // No hit test results - keep overlay visible briefly
-    const timeSinceLastHit = Date.now() - this.lastValidHitTime;
-    if (timeSinceLastHit > 500) {
-      this.surfaceOverlay.visible = false;
-      if (this.surfaceEdges) this.surfaceEdges.visible = false;
-      this.stableHitCount = 0;
-      this.lockedSurfaceHeight = null; // Unlock after timeout
+    // Highlight new pointed plane
+    if (pointedPlane) {
+      const mesh = this.planeMeshes.get(pointedPlane);
+      if (mesh && mesh.material) {
+        // Increase opacity to highlight
+        mesh.material.opacity = 0.8;
+      }
     }
 
-    return null;
+    this.currentPointedPlane = pointedPlane;
   }
 
   /**
-   * Check if a detected surface is horizontal (not vertical or tilted)
-   * @param {XRPose} pose - The pose from the hit test result
-   * @returns {boolean} True if the surface is horizontal
+   * Get the plane that the user is pointing at with their controller/hand (internal helper)
+   * @param {XRFrame} frame
+   * @param {XRReferenceSpace} referenceSpace
+   * @returns {XRPlane|null} The plane being pointed at, or null
    */
-  _isHorizontalPlane(pose) {
-    // Extract the surface normal from the pose's orientation quaternion
-    // For a horizontal plane, the normal should point upward (Y-axis)
-
-    // Get the quaternion from the pose
-    const quat = new THREE.Quaternion(
-      pose.transform.orientation.x,
-      pose.transform.orientation.y,
-      pose.transform.orientation.z,
-      pose.transform.orientation.w
-    );
-
-    // The surface normal is the Y-axis of the local coordinate system
-    // For WebXR hit test results, Y points away from the surface (the normal)
-    const normal = new THREE.Vector3(0, 1, 0);
-    normal.applyQuaternion(quat);
-
-    // Check if the normal is mostly pointing up or down (vertical normal = horizontal plane)
-    // For horizontal surfaces, the normal should align with world Y-axis
-    const worldUp = new THREE.Vector3(0, 1, 0);
-    const dotProduct = Math.abs(normal.dot(worldUp));
-
-    // Threshold: 0.92 means ~23 degrees max tilt (cos(23°) ≈ 0.92)
-    // Stricter threshold for better horizontal detection
-    // For horizontal table: dot ≈ 1.0 (normal points straight up)
-    // For vertical wall: dot ≈ 0.0 (normal points horizontally)
-    const isHorizontal = dotProduct > 0.92;
-
-    // Log only when state changes to reduce console spam
-    const currentState = `${isHorizontal ? 'H' : 'V'}-${dotProduct.toFixed(2)}`;
-    if (this.lastLoggedState !== currentState) {
-      console.log(`Surface ${isHorizontal ? 'ACCEPTED ✓' : 'REJECTED ✗'} - ` +
-                  `Normal: (${normal.x.toFixed(2)}, ${normal.y.toFixed(2)}, ${normal.z.toFixed(2)}), ` +
-                  `Dot: ${dotProduct.toFixed(2)} ${isHorizontal ? '(horizontal)' : '(vertical/tilted)'}`);
-      this.lastLoggedState = currentState;
+  _getPointedPlaneInternal(frame, referenceSpace) {
+    if (!this.planeDetectionSupported || this.planeMeshes.size === 0) {
+      return null;
     }
 
-    return isHorizontal;
+    // Get input sources (controllers, hands, gaze)
+    const session = frame.session;
+    const inputSources = session.inputSources;
+
+    if (!inputSources || inputSources.length === 0) {
+      return null;
+    }
+
+    // Check ALL input sources (both left and right hands/controllers)
+    let closestPlane = null;
+    let closestDistance = Infinity;
+    let foundFromHand = null;
+
+    for (const inputSource of inputSources) {
+      const targetRayPose = frame.getPose(inputSource.targetRaySpace, referenceSpace);
+
+      if (!targetRayPose) {
+        continue; // Skip this input source if no pose
+      }
+
+      // Create ray from input source
+      const rayOrigin = new THREE.Vector3(
+        targetRayPose.transform.position.x,
+        targetRayPose.transform.position.y,
+        targetRayPose.transform.position.z
+      );
+
+      // Get ray direction from the transform matrix
+      const matrix = new THREE.Matrix4().fromArray(targetRayPose.transform.matrix);
+      const rayDirection = new THREE.Vector3(0, 0, -1).applyMatrix4(matrix).normalize();
+
+      // Create raycaster
+      const raycaster = new THREE.Raycaster(rayOrigin, rayDirection);
+
+      // Find closest plane intersection from this input source
+      this.planeMeshes.forEach((mesh, plane) => {
+        const intersects = raycaster.intersectObject(mesh, false);
+        if (intersects.length > 0) {
+          const distance = intersects[0].distance;
+          if (distance < closestDistance) {
+            closestDistance = distance;
+            closestPlane = plane;
+            foundFromHand = inputSource.handedness;
+          }
+        }
+      });
+    }
+
+    // Log when plane is found (for debugging)
+    if (closestPlane && foundFromHand) {
+      // Only log occasionally to avoid spam (every 60 frames = ~1 second)
+      if (!this._lastLogFrame || (frame.session.frameIndex - this._lastLogFrame) > 60) {
+        console.log(`Plane detected by ${foundFromHand} hand at ${closestDistance.toFixed(2)}m`);
+        this._lastLogFrame = frame.session.frameIndex || 0;
+      }
+    }
+
+    return closestPlane;
   }
 
   /**
-   * Get detected surface size for desktop placement
-   * Returns fixed size - no dynamic resizing for stability
-   * @returns {Object} {width, depth}
+   * Get the plane that the user is pointing at with their controller/hand (public API)
+   * @param {XRFrame} frame
+   * @param {XRReferenceSpace} referenceSpace
+   * @returns {XRPlane|null} The plane being pointed at, or null
    */
-  getDetectedSize() {
+  getPointedPlane(frame, referenceSpace) {
+    return this._getPointedPlaneInternal(frame, referenceSpace);
+  }
+
+  /**
+   * Update a plane mesh to match the detected plane
+   * @param {THREE.Mesh} mesh
+   * @param {XRPlane} plane
+   * @param {XRFrame} frame
+   * @param {XRReferenceSpace} referenceSpace
+   */
+  _updatePlaneMesh(mesh, plane, frame, referenceSpace) {
+    const pose = frame.getPose(plane.planeSpace, referenceSpace);
+
+    if (pose) {
+      // Update position
+      mesh.position.setFromMatrixPosition(
+        new THREE.Matrix4().fromArray(pose.transform.matrix)
+      );
+
+      // Update rotation
+      mesh.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().fromArray(pose.transform.matrix)
+      );
+
+      // Update geometry based on plane polygon
+      if (plane.polygon && plane.polygon.length > 0) {
+        const geometry = this._createPlaneGeometryFromPolygon(plane.polygon);
+
+        // Dispose old geometry
+        mesh.geometry.dispose();
+        mesh.geometry = geometry;
+
+        // Update wireframe child
+        if (mesh.children[0]) {
+          const oldEdges = mesh.children[0].geometry;
+          mesh.children[0].geometry = new THREE.EdgesGeometry(geometry);
+          oldEdges.dispose();
+        }
+      }
+    }
+  }
+
+  /**
+   * Calculate approximate area of a polygon
+   * @param {Array} polygon - Array of DOMPointReadOnly vertices
+   * @returns {number} Approximate area in square meters
+   */
+  _calculatePolygonArea(polygon) {
+    if (polygon.length < 3) return 0;
+
+    let area = 0;
+    for (let i = 0; i < polygon.length; i++) {
+      const j = (i + 1) % polygon.length;
+      area += polygon[i].x * polygon[j].z;
+      area -= polygon[j].x * polygon[i].z;
+    }
+    return Math.abs(area / 2);
+  }
+
+  /**
+   * Get the currently selected plane for desktop placement
+   * @returns {XRPlane|null}
+   */
+  getSelectedPlane() {
+    return this.selectedPlane;
+  }
+
+  /**
+   * Set the selected plane (when user taps to place)
+   * @param {XRPlane} plane
+   */
+  setSelectedPlane(plane) {
+    this.selectedPlane = plane;
+  }
+
+  /**
+   * Get detected surface size from a specific plane
+   * @param {XRPlane} plane
+   * @returns {Object} {width, depth} Approximate size of the plane
+   */
+  getPlaneSize(plane) {
+    if (!plane || !plane.polygon || plane.polygon.length === 0) {
+      // Fallback to default size
+      return { width: 0.8, depth: 0.6 };
+    }
+
+    // Calculate bounding box of polygon
+    let minX = Infinity, maxX = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+
+    plane.polygon.forEach(point => {
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minZ = Math.min(minZ, point.z);
+      maxZ = Math.max(maxZ, point.z);
+    });
+
     return {
-      width: this.overlaySize.width,
-      depth: this.overlaySize.depth
+      width: maxX - minX,
+      depth: maxZ - minZ
     };
   }
 
   /**
-   * Get the last detected hit result with plane info
-   * @returns {XRHitTestResult|null}
+   * Hide all plane overlays (e.g., after desktop is placed)
    */
-  getLastHitResult() {
-    return this.lastHitResult;
+  hideOverlays() {
+    this.planeMeshes.forEach((mesh) => {
+      mesh.visible = false;
+    });
   }
 
   /**
-   * Hide surface overlay (e.g., after desktop is placed)
+   * Show all plane overlays
    */
-  hideOverlay() {
-    if (this.surfaceOverlay) {
-      this.surfaceOverlay.visible = false;
-    }
-    if (this.surfaceEdges) {
-      this.surfaceEdges.visible = false;
-    }
+  showOverlays() {
+    this.planeMeshes.forEach((mesh) => {
+      mesh.visible = true;
+    });
   }
 
   /**
    * Cleanup resources
    */
   dispose() {
-    if (this.hitTestSource) {
-      this.hitTestSource.cancel();
-      this.hitTestSource = null;
-    }
-
-    if (this.surfaceOverlay) {
-      this.sceneManager.remove(this.surfaceOverlay);
-      this.surfaceOverlay.geometry.dispose();
-      this.surfaceOverlay = null;
-    }
-
-    if (this.surfaceEdges) {
-      this.sceneManager.remove(this.surfaceEdges);
-      this.surfaceEdges.geometry.dispose();
-      this.surfaceEdges.material.dispose();
-      this.surfaceEdges = null;
-    }
+    // Remove all plane meshes
+    this.planeMeshes.forEach((mesh) => {
+      this.sceneManager.remove(mesh);
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+      // Dispose wireframe child
+      if (mesh.children[0]) {
+        mesh.children[0].geometry.dispose();
+        mesh.children[0].material.dispose();
+      }
+    });
+    this.planeMeshes.clear();
   }
 }

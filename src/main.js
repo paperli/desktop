@@ -160,10 +160,11 @@ class ARVirtualDesktop {
       this.materialLibrary
     );
 
-    // Initialize controller visualizer
+    // Initialize controller visualizer (pass surfaceDetector for ray intersection)
     this.controllerVisualizer = new ControllerVisualizer(
       this.session,
-      this.sceneManager
+      this.sceneManager,
+      this.surfaceDetector
     );
 
     // Initialize physics world
@@ -196,7 +197,8 @@ class ARVirtualDesktop {
     // Handle XR select events (trigger pull, tap, pinch gesture)
     // This fires when user performs an interaction action
     if (!this.isDesktopPlaced) {
-      console.log('Select event received from:', event.inputSource.targetRayMode);
+      console.log('Select event received from:', event.inputSource.targetRayMode,
+                  'handedness:', event.inputSource.handedness);
       this.selectEventPending = true;
     }
   }
@@ -215,11 +217,18 @@ class ARVirtualDesktop {
 
     // Update surface detection (before desktop placement)
     if (!this.isDesktopPlaced) {
-      const hitTestResult = this.surfaceDetector.update(frame, this.referenceSpace);
+      // Update all detected planes (visualization)
+      this.surfaceDetector.update(frame, this.referenceSpace);
 
-      // Check for tap to place desktop
-      if (hitTestResult && this._checkForTap(frame)) {
-        this._placeDesktop(hitTestResult, frame);
+      // Check if user is pointing at a plane and wants to place desktop
+      if (this._checkForTap(frame)) {
+        const pointedPlane = this.surfaceDetector.getPointedPlane(frame, this.referenceSpace);
+        if (pointedPlane) {
+          console.log('User selected a plane with pointer');
+          this._placeDesktop(pointedPlane, frame);
+        } else {
+          console.log('No plane under pointer ray');
+        }
       }
     }
 
@@ -254,17 +263,17 @@ class ARVirtualDesktop {
     return false;
   }
 
-  async _placeDesktop(hitTestResult, frame) {
+  async _placeDesktop(plane, frame) {
     try {
-      console.log('Placing desktop...');
+      console.log('Placing desktop on detected plane...');
 
-      // Get fixed surface size from detector (no dynamic resizing)
-      const detectedSize = this.surfaceDetector.getDetectedSize();
-      console.log('Using surface dimensions:', detectedSize);
+      // Get plane size from the detected plane
+      const detectedSize = this.surfaceDetector.getPlaneSize(plane);
+      console.log('Using plane dimensions:', detectedSize);
 
-      // Place desktop with detected size
-      const bounds = await this.desktopPlacer.placeDesktop(
-        hitTestResult,
+      // Place desktop with detected plane
+      const bounds = await this.desktopPlacer.placeDesktopOnPlane(
+        plane,
         frame,
         this.referenceSpace,
         detectedSize
@@ -315,8 +324,8 @@ class ARVirtualDesktop {
         this.throwController.throwPlate(plate, velocity);
       };
 
-      // Hide surface overlay and placement hint
-      this.surfaceDetector.hideOverlay();
+      // Hide surface overlays and placement hint
+      this.surfaceDetector.hideOverlays();
       this.hintDisplay.hide();
 
       // Update state
