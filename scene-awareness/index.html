@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebXR Plane Detection Demo</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            z-index: 100;
+        }
+        #startButton {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px 40px;
+            font-size: 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            z-index: 100;
+        }
+        #startButton:hover {
+            background: #45a049;
+        }
+        #startButton:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    <div id="info">
+        <div>Planes detected: <span id="planeCount">0</span></div>
+        <div>Status: <span id="status">Not started</span></div>
+        <div id="planeDetectionInfo" style="display: none;">Plane Detection: <span id="planeDetectionStatus">Unknown</span></div>
+    </div>
+    <button id="startButton">Start AR</button>
+
+    <script type="module">
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+        let container;
+        let camera, scene, renderer;
+        let xrSession = null;
+        let xrRefSpace = null;
+        let gl = null;
+
+        // Store plane meshes
+        const planeMeshes = new Map();
+
+        // UI elements
+        const startButton = document.getElementById('startButton');
+        const planeCountElement = document.getElementById('planeCount');
+        const statusElement = document.getElementById('status');
+        const planeDetectionInfo = document.getElementById('planeDetectionInfo');
+        const planeDetectionStatus = document.getElementById('planeDetectionStatus');
+
+        init();
+
+        function init() {
+            container = document.getElementById('container');
+
+            // Create scene
+            scene = new THREE.Scene();
+
+            // Create camera
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            gl = renderer.getContext();
+
+            // Add lights
+            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+            scene.add(light);
+
+            // Check WebXR support
+            if ('xr' in navigator) {
+                navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+                    if (supported) {
+                        startButton.disabled = false;
+                        startButton.addEventListener('click', onStartButtonClick);
+                        statusElement.textContent = 'Ready';
+                    } else {
+                        startButton.textContent = 'AR Not Supported';
+                        statusElement.textContent = 'AR not supported on this device';
+                    }
+                });
+            } else {
+                startButton.textContent = 'WebXR Not Available';
+                statusElement.textContent = 'WebXR not available';
+            }
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        async function onStartButtonClick() {
+            if (xrSession === null) {
+                try {
+                    // Request AR session with plane detection as optional
+                    // Don't require any specific reference space - we'll try them in order
+                    xrSession = await navigator.xr.requestSession('immersive-ar', {
+                        optionalFeatures: ['local', 'local-floor', 'viewer', 'plane-detection', 'hit-test']
+                    });
+
+                    await onSessionStarted();
+                } catch (error) {
+                    console.error('Error starting AR session:', error);
+                    statusElement.textContent = 'Error: ' + error.message;
+                    alert('Failed to start AR session: ' + error.message);
+                }
+            } else {
+                xrSession.end();
+            }
+        }
+
+        async function onSessionStarted() {
+            xrSession.addEventListener('end', onSessionEnded);
+
+            await renderer.xr.setSession(xrSession);
+
+            // Try different reference spaces in order of preference
+            const referenceSpaceTypes = ['local-floor', 'local', 'viewer'];
+            let refSpaceType = null;
+
+            for (const type of referenceSpaceTypes) {
+                try {
+                    xrRefSpace = await xrSession.requestReferenceSpace(type);
+                    refSpaceType = type;
+                    console.log(`Using reference space: ${type}`);
+                    break;
+                } catch (e) {
+                    console.log(`Reference space '${type}' not supported, trying next...`);
+                }
+            }
+
+            if (!xrRefSpace) {
+                throw new Error('No supported reference space found');
+            }
+
+            startButton.textContent = 'Stop AR';
+            startButton.style.display = 'none';
+
+            // Check if plane detection is enabled
+            const supportsPlaneDetection = xrSession.enabledFeatures &&
+                                          xrSession.enabledFeatures.includes('plane-detection');
+
+            planeDetectionInfo.style.display = 'block';
+
+            if (supportsPlaneDetection) {
+                statusElement.textContent = `AR Active (${refSpaceType})`;
+                planeDetectionStatus.textContent = 'Enabled';
+                planeDetectionStatus.style.color = '#4CAF50';
+            } else {
+                statusElement.textContent = `AR Active (${refSpaceType})`;
+                planeDetectionStatus.textContent = 'Not Supported';
+                planeDetectionStatus.style.color = '#ff9800';
+            }
+
+            // Start render loop
+            renderer.setAnimationLoop(onXRFrame);
+        }
+
+        function onSessionEnded() {
+            xrSession.removeEventListener('end', onSessionEnded);
+            xrSession = null;
+
+            startButton.textContent = 'Start AR';
+            startButton.style.display = 'block';
+            statusElement.textContent = 'Session Ended';
+            planeDetectionInfo.style.display = 'none';
+
+            // Clear all plane meshes
+            planeMeshes.forEach((mesh) => {
+                scene.remove(mesh);
+                mesh.geometry.dispose();
+                mesh.material.dispose();
+            });
+            planeMeshes.clear();
+            planeCountElement.textContent = '0';
+
+            renderer.setAnimationLoop(null);
+        }
+
+        function onXRFrame(time, frame) {
+            const session = frame.session;
+
+            if (!session || !xrRefSpace) return;
+
+            // Get detected planes
+            const detectedPlanes = frame.detectedPlanes;
+
+            if (detectedPlanes) {
+                // Update plane count
+                planeCountElement.textContent = detectedPlanes.size;
+
+                // Track which planes are still active
+                const activePlanes = new Set();
+
+                // Update or create meshes for detected planes
+                detectedPlanes.forEach((plane) => {
+                    activePlanes.add(plane);
+
+                    // Only process horizontal planes
+                    if (plane.orientation !== 'horizontal') {
+                        return;
+                    }
+
+                    let mesh = planeMeshes.get(plane);
+
+                    if (!mesh) {
+                        // Create new mesh for this plane
+                        mesh = createPlaneMesh();
+                        planeMeshes.set(plane, mesh);
+                        scene.add(mesh);
+                    }
+
+                    // Update mesh geometry and position
+                    updatePlaneMesh(mesh, plane, frame);
+                });
+
+                // Remove meshes for planes that are no longer detected
+                planeMeshes.forEach((mesh, plane) => {
+                    if (!activePlanes.has(plane)) {
+                        scene.remove(mesh);
+                        mesh.geometry.dispose();
+                        mesh.material.dispose();
+                        planeMeshes.delete(plane);
+                    }
+                });
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function createPlaneMesh() {
+            // Create a mesh with a semi-transparent material
+            const geometry = new THREE.PlaneGeometry(1, 1);
+            const material = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(Math.random(), Math.random(), Math.random()),
+                transparent: true,
+                opacity: 0.5,
+                side: THREE.DoubleSide,
+                wireframe: false
+            });
+
+            const mesh = new THREE.Mesh(geometry, material);
+
+            // Add a wireframe outline
+            const edges = new THREE.EdgesGeometry(geometry);
+            const line = new THREE.LineSegments(
+                edges,
+                new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 })
+            );
+            mesh.add(line);
+
+            return mesh;
+        }
+
+        function updatePlaneMesh(mesh, plane, frame) {
+            const pose = frame.getPose(plane.planeSpace, xrRefSpace);
+
+            if (pose) {
+                // Update position
+                mesh.position.setFromMatrixPosition(new THREE.Matrix4().fromArray(pose.transform.matrix));
+
+                // Update rotation
+                mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().fromArray(pose.transform.matrix));
+
+                // Update geometry based on plane polygon
+                if (plane.polygon && plane.polygon.length > 0) {
+                    const geometry = createPlaneGeometryFromPolygon(plane.polygon);
+
+                    // Dispose old geometry
+                    mesh.geometry.dispose();
+                    mesh.geometry = geometry;
+
+                    // Update wireframe
+                    if (mesh.children[0]) {
+                        const oldEdges = mesh.children[0].geometry;
+                        mesh.children[0].geometry = new THREE.EdgesGeometry(geometry);
+                        oldEdges.dispose();
+                    }
+                }
+            }
+        }
+
+        function createPlaneGeometryFromPolygon(polygon) {
+            // Convert polygon points to vertices
+            const vertices = [];
+            const indices = [];
+
+            // Add vertices
+            for (let i = 0; i < polygon.length; i++) {
+                vertices.push(polygon[i].x, polygon[i].y, polygon[i].z);
+            }
+
+            // Triangulate polygon (simple fan triangulation from first vertex)
+            for (let i = 1; i < polygon.length - 1; i++) {
+                indices.push(0, i, i + 1);
+            }
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            geometry.setIndex(indices);
+            geometry.computeVertexNormals();
+
+            return geometry;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+</html>

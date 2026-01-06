@@ -992,6 +992,27 @@ if (inputSource.gamepad?.hapticActuators?.length > 0) {
 
 This section documents the major refactor from hit-test based surface detection to native WebXR plane detection API, implemented specifically for Meta Quest 3 with improved reliability and user experience.
 
+### Reference Sample Code
+
+**Location**: `./scene-awareness/`
+
+A minimal working sample that demonstrates native plane detection API usage. This sample code was the reference implementation that proved plane detection works reliably on Quest 3, which led to refactoring the core project.
+
+**Key files**:
+- `index.html` - Single-file implementation showing plane detection fundamentals
+- `README.md` - Instructions for running the sample with HTTPS
+- `serve-https.py` / `serve.py` - Quick server setup scripts
+- `start-https.sh` - Automated HTTPS server startup
+
+**Why this sample is valuable**:
+- ✅ Demonstrates minimal plane detection implementation (~350 lines)
+- ✅ Shows correct API usage without framework overhead
+- ✅ Proven to work on Quest 3 (validated before core refactor)
+- ✅ Useful for quick prototyping and testing new AR features
+- ✅ Reference for troubleshooting when core project has issues
+
+**Usage**: See `scene-awareness/README.md` for running instructions.
+
 ---
 
 ### Problem Statement
